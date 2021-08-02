@@ -422,7 +422,7 @@ int main(int argc, char *argv[])
 	if (!getenv("X_NO_I_FILES"))
 		produce_i_files(resolved_cc, &data_mem);
 
-	{
+	if (data_mem.files) {
 		char **p = data_mem.files + data_mem.n_files;
 
 		while (--p >= data_mem.files)
@@ -430,7 +430,7 @@ int main(int argc, char *argv[])
 		xfree(data_mem.files);
 	}
 
-	{
+	if (data_mem.misc_args) {
 		char **p = data_mem.misc_args + data_mem.n_misc_args;
 
 		while (--p >= data_mem.misc_args)
