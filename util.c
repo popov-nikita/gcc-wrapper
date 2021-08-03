@@ -540,12 +540,10 @@ unsigned long trim_whitespaces(char *const base, unsigned long size)
 			init_ws = 0;
 
 			if (*src == '\n') {
-				if (seen_token) {
-					*dst++ = '\n';
-					saved_dst = dst;
-				} else {
+				if (!seen_token)
 					dst = saved_dst;
-				}
+				*dst++ = '\n';
+				saved_dst = dst;
 
 				seen_token = 0;
 				init_ws = 1;
@@ -632,7 +630,15 @@ unsigned long trim_whitespaces(char *const base, unsigned long size)
 			continue;
 
 		case S_IN_ML_COMMENT:
-			if (*src == '*') {
+			if (*src == '\n') {
+				if (!seen_token)
+					dst = saved_dst;
+				*dst++ = '\n';
+				saved_dst = dst;
+
+				seen_token = 0;
+				init_ws = 1;
+			} else if (*src == '*') {
 				char lookahead = (src + 1 < limit) ? *(src + 1) : '\0';
 
 				if (lookahead == '/') {
@@ -645,12 +651,10 @@ unsigned long trim_whitespaces(char *const base, unsigned long size)
 
 		case S_IN_OL_COMMENT:
 			if (*src == '\n') {
-				if (seen_token) {
-					*dst++ = '\n';
-					saved_dst = dst;
-				} else {
+				if (!seen_token)
 					dst = saved_dst;
-				}
+				*dst++ = '\n';
+				saved_dst = dst;
 
 				seen_token = 0;
 				init_ws = 1;
