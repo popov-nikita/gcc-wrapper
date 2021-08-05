@@ -491,7 +491,7 @@ dyn_buf_t *process_linemarkers(const char *const base, unsigned long size)
 			continue;
 		} else {
 			for (next = p;
-			     next < limit && *next != '\n';
+			     !is_end_of_line(next, limit);
 			     next++) ;
 			if (next < limit)
 				next++;
