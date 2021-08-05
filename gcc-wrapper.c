@@ -229,6 +229,10 @@ static dyn_buf_t *finalize_i_files_internal(char *start1,
 			next2++;
 	}
 
+	/* Second file contains unexpanded macros. So copy everything remained */
+	if (p2 < end2)
+		dyn_buf_printf(buf, "%.*s", (int) (end2 - p2), p2);
+
 	return buf;
 }
 
