@@ -54,6 +54,9 @@ static argv_data_t analyze_argv(int argc, const char *const argv[])
 					break;
 				}
 			}
+
+			if (strcmp(*cur + 1, "fdirectives-only") == 0)
+				continue;
 		} else {
 			unsigned long alen = strlen(*cur);
 			const unsigned long sfxlen = sizeof(".c") - 1UL;
