@@ -271,7 +271,7 @@ static int finalize_i_files(char *file)
 		return -E_MAL_FILE;
 
 	rc = E_SUCCESS;
-	buf_size = buf->pos - buf->base;
+	buf_size = shrink_lines(buf->base, (unsigned long) (buf->pos - buf->base));
 	*sfx = 'c';
 	if ((fd = open(file, O_CREAT | O_WRONLY | O_TRUNC, 0644)) < 0 ||
 	    write(fd, buf->base, (unsigned long) buf_size) != buf_size)
@@ -374,7 +374,6 @@ static void produce_i_files(const char *const cc,
 			        -rc);
 			goto next;
 		}
-		xfree(dump_file);
 
 		t[0] = '2';
 		*p++ = xstrdup("-fdirectives-only");
@@ -407,6 +406,8 @@ static void produce_i_files(const char *const cc,
 		}
 		unlink(ofile);
 
+		xfree(dump_file);
+		/* Argv includes `ofile`. So memory is freed here. */
 		while (--p >= argv)
 			xfree(*p);
 		xfree(argv);

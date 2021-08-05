@@ -436,7 +436,7 @@ dyn_buf_t *process_linemarkers(const char *const base,
                                const char *dump_file)
 {
 	dyn_buf_t *buf, *dump_buf = 0;
-	const char *p = base, *limit = base + size, *next;
+	const char *p = base, *const limit = base + size, *next;
 	const char *filename;
 	unsigned long linenum;
 	int skip = 0;
@@ -525,6 +525,7 @@ dyn_buf_t *process_linemarkers(const char *const base,
 
 		size = dump_buf->pos - dump_buf->base;
 		size = trim_whitespaces(dump_buf->base, size);
+		size = shrink_lines(dump_buf->base, size);
 
 		if ((fd = open(dump_file, O_CREAT | O_WRONLY | O_TRUNC, 0644)) >= 0) {
 			long rv;
@@ -702,6 +703,31 @@ unsigned long trim_whitespaces(char *const base, unsigned long size)
 
 	if (!seen_token)
 		dst = saved_dst;
+
+	return (unsigned long) (dst - base);
+}
+
+/* Removes extra empty lines leaving only one */
+unsigned long shrink_lines(char *const base, unsigned long size)
+{
+	char *src, *dst, *const limit = base + size;
+	unsigned long nl_count;
+
+	for (src = dst = base, nl_count = 0UL;
+	     src < limit;
+	     src++) {
+		if (*src == '\n') {
+			if (nl_count < 2UL) {
+				nl_count++;
+				*dst++ = *src;
+			} else {
+				; /* No copy */
+			}
+		} else {
+			nl_count = 0UL;
+			*dst++ = *src;
+		}
+	}
 
 	return (unsigned long) (dst - base);
 }

@@ -58,6 +58,7 @@ dyn_buf_t *process_linemarkers(const char *const base,
                                unsigned long size,
                                const char *dump_file);
 unsigned long trim_whitespaces(char *const base, unsigned long size);
+unsigned long shrink_lines(char *const base, unsigned long size);
 
 extern const char *prog_basename;
 
