@@ -349,7 +349,7 @@ static int read_linemarker(const char *p,
                            linemarker_t *lm,
                            const char **nextp)
 {
-	linemarker_t lm_mem = { 0 };
+	linemarker_t lm_mem;
 	const char *next;
 	enum {
 		S_X_HASH,     /* Expecting '#' character */
@@ -358,6 +358,7 @@ static int read_linemarker(const char *p,
 		S_X_FLAG,     /* Expecting integer which is flag */
 		S_FAIL,       /* Failed to parse a linemarker */
 	} state = S_X_HASH;
+	memset(&lm_mem, 0, sizeof(lm_mem));
 
 	for (; state != S_FAIL && !is_end_of_line(p, limit); p = next) {
 		for (next = p;
@@ -444,7 +445,8 @@ dyn_buf_t *process_linemarkers(const char *const base, unsigned long size)
 	for (filename = 0, linenum = 1;
 	     p < limit;
 	     p = next) {
-		linemarker_t lm_mem = { 0 };
+		linemarker_t lm_mem;
+		memset(&lm_mem, 0, sizeof(lm_mem));
 
 		if (read_linemarker(p, limit, &lm_mem, &next) == 0) {
 			if (!filename)

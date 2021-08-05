@@ -12,7 +12,8 @@ typedef struct {
 static argv_data_t analyze_argv(int argc, const char *const argv[])
 {
 	const char *const *cur = argv + 1, *const *const end = argv + argc;
-	argv_data_t data_mem = { 0 };
+	argv_data_t data_mem;
+	memset(&data_mem, 0, sizeof(data_mem));
 
 	for (; cur < end; cur++) {
 		if ((*cur)[0] == '-') {
