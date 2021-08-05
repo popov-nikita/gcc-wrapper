@@ -54,7 +54,9 @@ char *dyn_buf_reserve(dyn_buf_t *buf, unsigned long to_reserve);
 int dyn_buf_printf(dyn_buf_t *buf, const char *fmt, ...);
 void dyn_buf_free(dyn_buf_t *buf);
 
-dyn_buf_t *process_linemarkers(const char *const base, unsigned long size);
+dyn_buf_t *process_linemarkers(const char *const base,
+                               unsigned long size,
+                               const char *dump_file);
 unsigned long trim_whitespaces(char *const base, unsigned long size);
 
 extern const char *prog_basename;

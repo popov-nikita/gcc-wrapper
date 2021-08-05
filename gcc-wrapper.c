@@ -269,17 +269,17 @@ static int finalize_i_files(char *file)
 
 	rc = E_SUCCESS;
 	buf_size = buf->pos - buf->base;
-	*--sfx = '\0';
+	*sfx = 'c';
 	if ((fd = open(file, O_CREAT | O_WRONLY | O_TRUNC, 0644)) < 0 ||
 	    write(fd, buf->base, (unsigned long) buf_size) != buf_size)
 		rc = -E_IO;
-	*sfx = '.';
+	*sfx = '2';
 
 	if (fd >= 0) {
 		if (rc != E_SUCCESS) {
-			*sfx = '\0';
+			*sfx = 'c';
 			unlink(file);
-			*sfx = '.';
+			*sfx = '2';
 		}
 		close(fd);
 	}
@@ -289,7 +289,7 @@ static int finalize_i_files(char *file)
 	return rc;
 }
 
-static int produce_i_files_internal(const char *file)
+static int produce_i_files_internal(const char *file, const char *dump_file)
 {
 	void *base;
 	unsigned long size;
@@ -300,7 +300,7 @@ static int produce_i_files_internal(const char *file)
 	if (load_file(file, &base, &size) < 0)
 		return -E_IO;
 
-	buf = process_linemarkers(base, size);
+	buf = process_linemarkers(base, size, dump_file);
 	unload_file(base, size);
 	if (!buf)
 		return -E_MAL_FILE;
@@ -328,8 +328,9 @@ static void produce_i_files(const char *const cc,
 		const char *ifile = data->files[i];
 		char *ofile, *t;
 		char **argv, **p;
+		char *dump_file;
 		unsigned long ilen = strlen(ifile);
-		unsigned long olen = ilen + (sizeof(".i.X") - sizeof(".c"));
+		unsigned long olen = ilen + (sizeof("._i_.X") - sizeof(".c"));
 		unsigned long j;
 		int rc;
 
@@ -337,7 +338,9 @@ static void produce_i_files(const char *const cc,
 		t += ilen - (sizeof(".c") - 1UL);
 		memcpy(ofile, ifile, (unsigned long) (t - ofile));
 		*t++ = '.';
+		*t++ = '_';
 		*t++ = 'i';
+		*t++ = '_';
 		*t++ = '.';
 		t[0] = '1';
 		t[1] = '\0';
@@ -357,7 +360,10 @@ static void produce_i_files(const char *const cc,
 
 		run_cmd(argv);
 
-		if ((rc = produce_i_files_internal(ofile)) < 0) {
+		dump_file = xstrdup(ofile);
+		*(dump_file + (long) (t - ofile)) = 'c';
+		*(dump_file + ((long) (t - ofile) - 3L)) = 'd';
+		if ((rc = produce_i_files_internal(ofile, dump_file)) < 0) {
 			fprintf(stderr,
 			        "%s: error while handling file %s. Code = %d. Skipped\n",
 			        prog_basename,
@@ -365,6 +371,7 @@ static void produce_i_files(const char *const cc,
 			        -rc);
 			goto next;
 		}
+		xfree(dump_file);
 
 		t[0] = '2';
 		*p++ = xstrdup("-fdirectives-only");
@@ -372,7 +379,7 @@ static void produce_i_files(const char *const cc,
 
 		run_cmd(argv);
 
-		if ((rc = produce_i_files_internal(ofile)) < 0) {
+		if ((rc = produce_i_files_internal(ofile, 0)) < 0) {
 			fprintf(stderr,
 			        "%s: error while handling file %s. Code = %d. Skipped\n",
 			        prog_basename,

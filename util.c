@@ -431,9 +431,11 @@ static int read_linemarker(const char *p,
 	}
 }
 
-dyn_buf_t *process_linemarkers(const char *const base, unsigned long size)
+dyn_buf_t *process_linemarkers(const char *const base,
+                               unsigned long size,
+                               const char *dump_file)
 {
-	dyn_buf_t *buf;
+	dyn_buf_t *buf, *dump_buf = 0;
 	const char *p = base, *limit = base + size, *next;
 	const char *filename;
 	unsigned long linenum;
@@ -441,6 +443,11 @@ dyn_buf_t *process_linemarkers(const char *const base, unsigned long size)
 
 	buf = xmalloc(sizeof(*buf));
 	dyn_buf_init(buf);
+
+	if (dump_file) {
+		dump_buf = xmalloc(sizeof(*dump_buf));
+		dyn_buf_init(dump_buf);
+	}
 
 	for (filename = 0, linenum = 1;
 	     p < limit;
@@ -472,6 +479,10 @@ dyn_buf_t *process_linemarkers(const char *const base, unsigned long size)
 						/* File is malformed */
 						if (filename)
 							xfree((void *) filename);
+						if (dump_buf) {
+							dyn_buf_free(dump_buf);
+							xfree(dump_buf);
+						}
 						dyn_buf_free(buf);
 						xfree(buf);
 						return 0;
@@ -497,14 +508,36 @@ dyn_buf_t *process_linemarkers(const char *const base, unsigned long size)
 				next++;
 		}
 
-		if (skip)
+		if (skip) {
+			if (dump_buf)
+				dyn_buf_printf(dump_buf, "%.*s", (int) (next - p), p);
 			continue;
+		}
 		dyn_buf_printf(buf, "%.*s", (int) (next - p), p);
 		linenum++;
 	}
 
 	if (filename)
 		xfree((void *) filename);
+	if (dump_buf) {
+		int fd;
+		unsigned long size;
+
+		size = dump_buf->pos - dump_buf->base;
+		size = trim_whitespaces(dump_buf->base, size);
+
+		if ((fd = open(dump_file, O_CREAT | O_WRONLY | O_TRUNC, 0644)) >= 0) {
+			long rv;
+
+			if ((rv = write(fd, dump_buf->base, size)) < 0L ||
+			    (unsigned long) rv != size)
+				unlink(dump_file);
+			close(fd);
+		}
+
+		dyn_buf_free(dump_buf);
+		xfree(dump_buf);
+	}
 
 	return buf;
 }
