@@ -2,6 +2,11 @@
 
 const char *prog_basename = "";
 
+static struct {
+	int argc;
+	const char *const *argv;
+} globals;
+
 typedef struct {
 	char **files;
 	unsigned long n_files;
@@ -246,6 +251,7 @@ static int finalize_i_files(char *file)
 	unsigned long size_1, size_2, new_size_1, new_size_2, buf_size;
 	dyn_buf_t *buf;
 	int fd, rc;
+	const char *const *p;
 
 	*sfx = '1';
 	rc = load_file(file, &base_1, &size_1);
@@ -269,10 +275,17 @@ static int finalize_i_files(char *file)
 	if (!buf)
 		return -E_MAL_FILE;
 
+	*sfx = 'c';
+
+	/* Append original ARGV to the end of file in C comment */
+	dyn_buf_printf(buf, "\n/*");
+	for (p = globals.argv; *p; p++)
+		dyn_buf_printf(buf, " %s", *p);
+	dyn_buf_printf(buf, " */\n");
+
 	rc = -E_IO;
 	buf_size = buf->pos - buf->base;
 	buf_size = shrink_lines(buf->base, buf_size);
-	*sfx = 'c';
 	if ((fd = open(file, O_CREAT | O_WRONLY | O_TRUNC, 0644)) >= 0) {
 		long rv;
 
@@ -284,6 +297,7 @@ static int finalize_i_files(char *file)
 		}
 		close(fd);
 	}
+
 	*sfx = '2';
 
 	dyn_buf_free(buf);
@@ -421,6 +435,8 @@ int main(int argc, char *argv[])
 	argv_data_t data_mem;
 
 	prog_basename = get_basename(argv[0]);
+	globals.argc = argc;
+	globals.argv = (const char *const *) argv;
 
 	if (!cc)
 		cc = "gcc";
@@ -431,9 +447,9 @@ int main(int argc, char *argv[])
 		return E_SRCH;
 	}
 
-	data_mem = analyze_argv(argc, (const char *const *) argv);
+	data_mem = analyze_argv(globals.argc, globals.argv);
 
-	run_gcc(resolved_cc, argc, (const char *const *) argv);
+	run_gcc(resolved_cc, globals.argc, globals.argv);
 
 	if (!getenv("X_NO_I_FILES"))
 		produce_i_files(resolved_cc, &data_mem);
