@@ -1,6 +1,10 @@
-*
-!*.c
-!*.h
-!Makefile
-!README.md
-!*.patch
+/*
+!/*.c
+!/*.h
+!/Makefile
+!/README.md
+!/*.patch
+!/tests/
+/tests/*
+!/tests/run_tests.sh
+!/tests/*.orig.tar.*

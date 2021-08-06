@@ -10,7 +10,10 @@ RM := rm
 all: $(PROGRAM)
 clean:
 	$(RM) -v $(PROGRAM) $(OBJECTS)
-.PHONY: all clean
+test:
+	./tests/run_tests.sh
+
+.PHONY: all clean test
 
 $(PROGRAM): $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $^
