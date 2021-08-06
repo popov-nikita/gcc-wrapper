@@ -243,8 +243,7 @@ static int finalize_i_files(char *file)
 {
 	char *sfx = file + (strlen(file) - 1UL);
 	void *base_1, *base_2;
-	unsigned long size_1, size_2, new_size_1, new_size_2;
-	long buf_size;
+	unsigned long size_1, size_2, new_size_1, new_size_2, buf_size;
 	dyn_buf_t *buf;
 	int fd, rc;
 
@@ -270,22 +269,23 @@ static int finalize_i_files(char *file)
 	if (!buf)
 		return -E_MAL_FILE;
 
-	rc = E_SUCCESS;
-	buf_size = shrink_lines(buf->base, (unsigned long) (buf->pos - buf->base));
+	rc = -E_IO;
+	buf_size = buf->pos - buf->base;
+	buf_size = shrink_lines(buf->base, buf_size);
 	*sfx = 'c';
-	if ((fd = open(file, O_CREAT | O_WRONLY | O_TRUNC, 0644)) < 0 ||
-	    write(fd, buf->base, (unsigned long) buf_size) != buf_size)
-		rc = -E_IO;
-	*sfx = '2';
+	if ((fd = open(file, O_CREAT | O_WRONLY | O_TRUNC, 0644)) >= 0) {
+		long rv;
 
-	if (fd >= 0) {
-		if (rc != E_SUCCESS) {
-			*sfx = 'c';
+		if ((rv = write(fd, buf->base, buf_size)) >= 0L &&
+		    (unsigned long) rv == buf_size) {
+			rc = E_SUCCESS;
+		} else {
 			unlink(file);
-			*sfx = '2';
 		}
 		close(fd);
 	}
+	*sfx = '2';
+
 	dyn_buf_free(buf);
 	xfree(buf);
 
