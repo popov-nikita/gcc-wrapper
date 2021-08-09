@@ -9,7 +9,7 @@ RM := rm
 
 all: $(PROGRAM)
 clean:
-	$(RM) -v $(PROGRAM) $(OBJECTS)
+	$(RM) -f -v $(PROGRAM) $(OBJECTS)
 test:
 	./tests/run_tests.sh
 
