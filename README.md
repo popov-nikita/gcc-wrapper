@@ -1,7 +1,7 @@
 # GCC-WRAPPER
 
 Welcome to the base repository of GCC wrapper project.
-GCC wrapper aims to simplify C code analysis by security researchers. It does so by producing special files at compilation time of a target project. GCC wrapper is used in place of the true GCC and during its operation the true GCC is invoked.
+GCC wrapper aims to simplify C code analysis for security researchers. It does so by producing special files at compilation time of a target project. GCC wrapper is used in place of the true GCC and during its operation the true GCC is invoked.
 For each C source file there are 2 files produced:
 - ```<filename>._i_.c``` - contains no directives of conditional compilation; each line having a macro which is to be expanded by C preprocessor has a comment beneath it. Inside the comment there are expanded contents of the line. So a researcher can easily see what a particular line of original source file stands for. Original comments are trimmed. To simplify manual re-compilation, a full command which is used to compile particular object file is appended to the end of produced file. It is remarkable that ```*._i_.c``` files can be safely used instead of original source files and the target project can be compiled from them.
 - ```<filename>._d_.c``` - contains definitions taken from all included files. Simplifies lookup of a declarations.
@@ -72,12 +72,12 @@ There are two environment variables which can affect operation of GCC wrapper:
 Usage case:
 Consider APR (Apache Portable Runtime) project of 1.6.3 version. We have apr_1.6.3.orig.tar.bz2 for it.  
 First, we unpack the project:  
-$ tar -x  -f apr_1.6.3.orig.tar.bz2  
-$ cd apr-1.6.3  
+```$ tar -x  -f apr_1.6.3.orig.tar.bz2```  
+```$ cd apr-1.6.3```  
 Then we run ./configure script with set CC variable pointing to our wrapper:  
-$ CC=/path/to/gcc-wrapper ./configure  
+```$ CC=/path/to/gcc-wrapper ./configure```  
 Finally, 'make' utility will compile project as usual. As the side effect, ```*._[id]_.c``` files are produced.  
-$ make  
+```$ make```  
 That's all.
 
 A projects not relying on ./configure script (for example, linux kernel) must have other way to specify C compiler.
