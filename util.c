@@ -68,9 +68,19 @@ char *locate_bin_file(const char *bname)
 	unsigned long blen;
 
 	if (!bname ||
-	    !(blen = strlen(bname)) ||
-	    !(path = getenv("PATH")))
+	    !*bname)
 		return resolved;
+
+	if (*bname == '/') {
+		if (access(bname, X_OK) == 0)
+			resolved = xstrdup(bname);
+		return resolved;
+	}
+
+	if (!(path = getenv("PATH")))
+		return resolved;
+
+	blen = strlen(bname);
 
 	for (s = path; *s; s = e + !!*e) {
 		char *p;
