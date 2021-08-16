@@ -244,22 +244,20 @@ static dyn_buf_t *finalize_i_files_internal(char *start1,
 	return buf;
 }
 
-static int finalize_i_files(char *file)
+static int finalize_i_files(const char *ifile,
+                            const char *ifile_1,
+                            const char *ifile_2)
 {
-	char *sfx = file + (strlen(file) - 1UL);
 	void *base_1, *base_2;
-	unsigned long size_1, size_2, new_size_1, new_size_2, buf_size;
+	unsigned long size_1, size_2, new_size_1, new_size_2;
 	dyn_buf_t *buf;
 	int fd, rc;
 	const char *const *p;
 
-	*sfx = '1';
-	rc = load_file(file, &base_1, &size_1);
-	*sfx = '2';
-	if (rc < 0)
+	if (load_file(ifile_1, &base_1, &size_1) < 0)
 		return -E_IO;
 
-	if (load_file(file, &base_2, &size_2) < 0) {
+	if (load_file(ifile_2, &base_2, &size_2) < 0) {
 		unload_file(base_1, size_1);
 		return -E_IO;
 	}
@@ -272,10 +270,9 @@ static int finalize_i_files(char *file)
 
 	unload_file(base_1, size_1);
 	unload_file(base_2, size_2);
+
 	if (!buf)
 		return -E_MAL_FILE;
-
-	*sfx = 'c';
 
 	/* Append original ARGV to the end of file in C comment */
 	dyn_buf_printf(buf, "\n/*");
@@ -284,21 +281,21 @@ static int finalize_i_files(char *file)
 	dyn_buf_printf(buf, " */\n");
 
 	rc = -E_IO;
-	buf_size = buf->pos - buf->base;
-	buf_size = shrink_lines(buf->base, buf_size);
-	if ((fd = open(file, O_CREAT | O_WRONLY | O_TRUNC, 0644)) >= 0) {
+	if ((fd = open(ifile, O_WRONLY, 0644)) >= 0) {
 		long rv;
+		unsigned long size;
 
-		if ((rv = write(fd, buf->base, buf_size)) >= 0L &&
-		    (unsigned long) rv == buf_size) {
+		size = buf->pos - buf->base;
+		size = shrink_lines(buf->base, size);
+
+		if ((rv = write(fd, buf->base, size)) >= 0L &&
+		    (unsigned long) rv == size) {
 			rc = E_SUCCESS;
 		} else {
-			unlink(file);
+			unlink(ifile);
 		}
 		close(fd);
 	}
-
-	*sfx = '2';
 
 	dyn_buf_free(buf);
 	xfree(buf);
@@ -310,9 +307,9 @@ static int produce_i_files_internal(const char *file, const char *dump_file)
 {
 	void *base;
 	unsigned long size;
-	long buf_size;
 	dyn_buf_t *buf;
-	int fd, rc;
+	int dump_fd;
+	int rc;
 
 	if (load_file(file, &base, &size) < 0)
 		return -E_IO;
@@ -322,14 +319,17 @@ static int produce_i_files_internal(const char *file, const char *dump_file)
 	if (!buf)
 		return -E_MAL_FILE;
 
-	rc = E_SUCCESS;
-	buf_size = buf->pos - buf->base;
-	if ((fd = open(file, O_WRONLY | O_TRUNC)) < 0 ||
-	    write(fd, buf->base, (unsigned long) buf_size) != buf_size)
-		rc = -E_IO;
+	rc = -E_IO;
+	if ((dump_fd = open(file, O_WRONLY | O_TRUNC)) >= 0) {
+		long dump_len = buf->pos - buf->base;
 
-	if (fd >= 0)
-		close(fd);
+		if (write(dump_fd, buf->base, (unsigned long) dump_len) == dump_len)
+			rc = E_SUCCESS;
+		else
+			unlink(file);
+		close(dump_fd);
+	}
+
 	dyn_buf_free(buf);
 	xfree(buf);
 
@@ -342,89 +342,96 @@ static void produce_i_files(const char *const cc,
 	unsigned long i;
 
 	for (i = 0UL; i < data->n_files; i++) {
-		const char *ifile = data->files[i];
-		char *ofile, *t;
-		char **argv, **p;
-		char *dump_file;
-		unsigned long ilen = strlen(ifile);
-		unsigned long olen = ilen + (sizeof("._i_.X") - sizeof(".c"));
-		unsigned long j;
+		const char *file = data->files[i];
+		char **argv, **argp;
+		char *ifile, *ifile_1, *ifile_2, *dfile;
+		char *extra_arg = 0;
+		unsigned long sfx_off, j;
 		int rc;
 
-		t = ofile = xmalloc(olen + 1UL);
-		t += ilen - (sizeof(".c") - 1UL);
-		memcpy(ofile, ifile, (unsigned long) (t - ofile));
-		*t++ = '.';
-		*t++ = '_';
-		*t++ = 'i';
-		*t++ = '_';
-		*t++ = '.';
-		t[0] = '1';
-		t[1] = '\0';
+		ifile = get_basename(file);
+		sfx_off = strlen(ifile);
+		ifile = xrealloc(ifile, sfx_off + sizeof("._i_.c")); /* Includes space for '\0' */
+		memcpy(ifile + sfx_off, "._i_.c", sizeof("._i_.c"));
 
-		p = argv = xmalloc(sizeof(*argv) * (data->n_misc_args + 10UL));
-		*p++ = xstrdup(cc);
+		/* Does file already exist? */
+		if ((rc = open(ifile, O_CREAT | O_RDWR | O_EXCL, 0644)) >= 0)
+			close(rc);
+		else
+			goto free_ifile;
+
+		argp = argv = xmalloc(sizeof(*argv) * (data->n_misc_args + 10UL));
+		*argp++ = xstrdup(cc);
 		for (j = 0UL; j < data->n_misc_args; j++)
-			*p++ = xstrdup(data->misc_args[j]);
-		*p++ = xstrdup("-o");
-		*p++ = ofile;
-		*p++ = xstrdup(ifile);
-		*p++ = xstrdup("-E");
-		*p++ = xstrdup("-C");
-		*p++ = xstrdup("-dD");
-		*p++ = xstrdup("-dI");
-		*p = 0;
+			*argp++ = xstrdup(data->misc_args[j]);
+		*argp++ = xstrdup(file);
+		*argp++ = xstrdup("-E");
+		*argp++ = xstrdup("-C");
+		*argp++ = xstrdup("-dD");
+		*argp++ = xstrdup("-dI");
+		*argp++ = xstrdup("-o");
+		argp[0] = 0; /* For output file */
+		argp[1] = 0; /* For possible -fdirectives-only arg */
+		argp[2] = 0; /* Trailing ARGV NULL */
+		extra_arg = xstrdup("-fdirectives-only");
 
+		ifile_1 = xstrdup(ifile);
+		memcpy(ifile_1 + sfx_off, "._i_.1", sizeof("._i_.1"));
+		ifile_2 = xstrdup(ifile);
+		memcpy(ifile_2 + sfx_off, "._i_.2", sizeof("._i_.2"));
+		dfile = xstrdup(ifile);
+		memcpy(dfile + sfx_off, "._d_.c", sizeof("._d_.c"));
+
+		argp[0] = ifile_1;
 		run_cmd(argv);
-
-		dump_file = xstrdup(ofile);
-		*(dump_file + (long) (t - ofile)) = 'c';
-		*(dump_file + ((long) (t - ofile) - 3L)) = 'd';
-		if ((rc = produce_i_files_internal(ofile, dump_file)) < 0) {
+		if ((rc = produce_i_files_internal(ifile_1, dfile)) < 0) {
 			fprintf(stderr,
 			        "%s: error while handling file %s. Code = %d. Skipped\n",
 			        prog_basename,
-			        ofile,
+			        ifile_1,
 			        -rc);
-			goto next;
+			goto free_all;
 		}
 
-		t[0] = '2';
-		*p++ = xstrdup("-fdirectives-only");
-		*p = 0;
-
+		argp[0] = ifile_2;
+		argp[1] = extra_arg;
 		run_cmd(argv);
-
-		if ((rc = produce_i_files_internal(ofile, 0)) < 0) {
+		if ((rc = produce_i_files_internal(ifile_2, 0)) < 0) {
 			fprintf(stderr,
 			        "%s: error while handling file %s. Code = %d. Skipped\n",
 			        prog_basename,
-			        ofile,
+			        ifile_2,
 			        -rc);
-			goto next;
+			unlink(dfile);
+			goto rm_ifile_1;
 		}
 
-		if ((rc = finalize_i_files(ofile)) < 0) {
+		if ((rc = finalize_i_files(ifile, ifile_1, ifile_2)) < 0) {
 			fprintf(stderr,
 			        "%s: failed to produce resulting file for %s. Code = %d\n",
 			        prog_basename,
-			        ifile,
+			        file,
 			        -rc);
-			goto next;
+			unlink(dfile);
+			goto rm_ifile_2;
 		}
 
-	next:
-		if (*t == '2') {
-			unlink(ofile);
-			*t = '1';
-		}
-		unlink(ofile);
+		;
 
-		xfree(dump_file);
-		/* Argv includes `ofile`. So memory is freed here. */
-		while (--p >= argv)
-			xfree(*p);
+	rm_ifile_2:
+		unlink(ifile_2);
+	rm_ifile_1:
+		unlink(ifile_1);
+	free_all:
+		xfree(dfile);
+		xfree(ifile_2);
+		xfree(ifile_1);
+		xfree(extra_arg);
+		while (--argp >= argv)
+			xfree(*argp);
 		xfree(argv);
+	free_ifile:
+		xfree(ifile);
 	}
 }
 

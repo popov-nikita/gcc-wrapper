@@ -52,8 +52,8 @@ char *get_basename(const char *path)
 			e = s;
 	s++;
 
-	p = res = xmalloc((unsigned long) (e - s) + 1UL);
-	for (; s < e;)
+	p = res = xmalloc((unsigned long) (e - path) + 1UL);
+	for (s = path; s < e;)
 		*p++ = *s++;
 	*p = '\0';
 
