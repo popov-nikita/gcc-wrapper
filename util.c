@@ -1,743 +1,296 @@
-#include	"common.h"
+#include "common.h"
+
+static void panic_no_memory(unsigned long size)
+{
+        static const char msg1[] = "Failed to allocate ";
+        static const unsigned long msg1_len = sizeof(msg1) - 1UL;
+        static const char msg2[] = " bytes of memory\n";
+        static const unsigned long msg2_len = sizeof(msg2) - 1UL;
+        char _mem[64], *p1 = _mem, *p2;
+        long unused;
+
+        unused = write(STDERR_FILENO, msg1, msg1_len), (void) unused;
+
+        do {
+                int d = (int) (size % 10UL) + '0';
+                *p1++ = d;
+                size /= 10UL;
+        } while (p1 < _mem + sizeof(_mem) && size > 0);
+
+        size = (unsigned long) (p1 - _mem);
+
+        for (p1--, p2 = _mem; p1 > p2; p1--, p2++) {
+                char tmp;
+                tmp = *p1;
+                *p1 = *p2;
+                *p2 = tmp;
+        }
+
+        unused = write(STDERR_FILENO, _mem, size), (void) unused;
+
+        unused = write(STDERR_FILENO, msg2, msg2_len), (void) unused;
+
+        _exit(ENOMEM);
+}
+
+void *xmalloc(unsigned long size)
+{
+        void *ret;
+
+        ret = malloc(size);
+
+        if (ret == NULL)
+                panic_no_memory(size);
+
+        return ret;
+}
+
+void *xrealloc(void *ptr, unsigned long size)
+{
+        void *ret;
+
+        ret = realloc(ptr, size);
+
+        if (ret == NULL) {
+                xfree(ptr);
+                panic_no_memory(size);
+        }
+
+        return ret;
+}
+
+void  xfree(void *ptr)
+{
+        if (ptr)
+                free(ptr);
+}
+
+char *xstrdup(const char *s)
+{
+        char *d;
+        unsigned long size;
+
+        if (s == NULL)
+                return 0;
+
+        size = strlen(s) + 1UL;
+        d = xmalloc(size);
+        memcpy(d, s, size);
+
+        return d;
+}
+
+/* Using $PATH environment variable locates real path of target binary */
+char *locate_file(const char *name)
+{
+        unsigned long name_len;
+        char *resolved_name = NULL;
+        const char *path_env, *s, *e;
+        int is_resolved, seen_zero_seg = 0;
+
+        if (name == NULL || *name == '\0')
+                return resolved_name;
+
+        /* Names starting with "/", "./", "../" or being one of
+           ".", ".." should be handled separately */
+        is_resolved = (name[0] == '/' ||
+                       (name[0] == '.' && (name[1] == '\0' ||
+                                           name[1] == '/'  ||
+                                           (name[1] == '.'  && (name[2] == '\0' ||
+                                                                name[2] == '/')))));
+        if (is_resolved) {
+                if (access(name, X_OK) == 0)
+                        resolved_name = xstrdup(name);
+                return resolved_name;
+        }
+
+        if ((path_env = getenv("PATH")) == NULL)
+                return resolved_name;
+
+        name_len = strlen(name);
+
+        for (s = path_env; *s != '\0'; s = e + !!*e) {
+                const char *seg;
+                unsigned long seg_size;
+                char *buf, *last;
+
+                for (e = s; *e != '\0' && *e != ':'; e++) ;
+
+                if (s == e) {
+                        if (seen_zero_seg)
+                                continue;
+                        seg = ".";
+                        seg_size = 1UL;
+                        seen_zero_seg = 1;
+                } else {
+                        seg = s;
+                        seg_size = (unsigned long) (e - s);
+                }
+
+                last = buf = xmalloc(seg_size + 1UL + name_len + 1UL);
+                memcpy(last, seg, seg_size),  last += seg_size;
+                *last = '/',                  last += 1;
+                memcpy(last, name, name_len), last += name_len;
+                *last = '\0';
+
+                if (access(buf, X_OK) == 0) {
+                        return resolved_name = buf;
+                }
+
+                xfree(buf);
+        }
+
+        if (!seen_zero_seg && (*path_env == '\0' ||
+                               *(s - 1)  == ':')) {
+                char *buf;
+
+                seen_zero_seg = 1;
+                buf = xmalloc(1UL + 1UL + name_len + 1UL);
+                buf[0] = '.';
+                buf[1] = '/';
+                strcpy(buf + 2, name);
+
+                if (access(buf, X_OK) == 0)
+                        resolved_name = buf;
+                else
+                        xfree(buf);
+        }
+
+        return resolved_name;
+}
 
 /* Creates private RW mapping of the file specified with @path.
    Return -1 on failure (for any reason), 0 - on success.
    Provides mapping data (base address + size) via pointers @basep, @sizep. */
 int load_file(const char *path, void **basep, unsigned long *sizep)
 {
-	int fd, rc = -1;
-	void *base;
-	unsigned long size;
-	struct stat st_mem;
+        int fd, rc = -1;
+        void *base;
+        unsigned long size;
+        struct stat st_mem;
 
-	if ((fd = open(path, O_RDONLY)) < 0)
-		goto out;
+        if ((fd = open(path, O_RDONLY)) < 0)
+                goto out;
 
-	if ((memset(&st_mem, 0, sizeof(st_mem)), fstat(fd, &st_mem)) < 0 ||
-	    st_mem.st_size <= 0)
-		goto out_close;
+        memset(&st_mem, 0, sizeof(st_mem));
+        if (fstat(fd, &st_mem) < 0 ||
+            st_mem.st_size <= 0L)
+                goto out_close;
 
-	size = (unsigned long) st_mem.st_size;
-	if ((base = mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0)) == MAP_FAILED)
-		goto out_close;
+        size = (unsigned long) st_mem.st_size;
+        base = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0L);
+        if (base == MAP_FAILED)
+                goto out_close;
 
-	*basep = base;
-	*sizep = size;
-	rc = 0;
+        *basep = base;
+        *sizep = size;
+        rc = 0;
 
 out_close:
-	close(fd);
+        close(fd);
 out:
-	return rc;
+        return rc;
 }
 
-/* Wrapper around `munmap` call to remove loaded file */
+/* Removes file mapping */
 void unload_file(void *base, unsigned long size)
 {
-	munmap(base, size);
+        munmap(base, size);
 }
 
-char *get_basename(const char *path)
+void  dbuf_init(dbuf_t *dbuf)
 {
-	const char *s, *e;
-	char *res, *p;
-
-	if (!path)
-		return 0;
-
-	for (e = s = path + strlen(path);
-	     s >= path && *s != '/';
-	     s--)
-		if (*s == '.')
-			e = s;
-	s++;
-
-	p = res = xmalloc((unsigned long) (e - path) + 1UL);
-	for (s = path; s < e;)
-		*p++ = *s++;
-	*p = '\0';
-
-	return res;
+        if (dbuf == NULL)
+                return;
+        dbuf->pos = dbuf->base = dbuf->_mem;
+        dbuf->capacity = sizeof(dbuf->_mem) / sizeof(dbuf->_mem[0]);
 }
 
-/* Using $PATH environment variable locates real path of target binary */
-char *locate_bin_file(const char *bname)
+char *dbuf_alloc(dbuf_t *dbuf, unsigned long size)
 {
-	const char *path, *s, *e;
-	char *resolved = 0, *tmp;
-	unsigned long blen;
+        unsigned long old_size;
 
-	if (!bname ||
-	    !*bname)
-		return resolved;
+        if (dbuf == NULL)
+                return NULL;
 
-	if (*bname == '/') {
-		if (access(bname, X_OK) == 0)
-			resolved = xstrdup(bname);
-		return resolved;
-	}
+        old_size = (unsigned long) (dbuf->pos - dbuf->base);
+        size += old_size;
 
-	if (!(path = getenv("PATH")))
-		return resolved;
+        /* Overflow? */
+        if (size < old_size)
+                return NULL;
 
-	blen = strlen(bname);
+        /* Too large? */
+        if (size > ULONG_MAX / 2UL)
+                return NULL;
 
-	for (s = path; *s; s = e + !!*e) {
-		char *p;
+        if (size > dbuf->capacity) {
+                while (size > (dbuf->capacity *= 2UL)) ;
 
-		for (e = s; *e && *e != ':'; e++) ;
+                if (dbuf->base == dbuf->_mem) {
+                        dbuf->base = xmalloc(dbuf->capacity);
+                        memcpy(dbuf->base, dbuf->_mem, old_size);
+                } else {
+                        dbuf->base = xrealloc(dbuf->base, dbuf->capacity);
+                }
 
-		if (s == e) {
-			tmp = xmalloc(1UL + 1UL + blen + 1UL);
-			tmp[0] = '.';
-			p = tmp + 1;
-		} else {
-			tmp = xmalloc((unsigned long) (e - s) + 1UL + blen + 1UL);
-			memcpy(tmp, s, (unsigned long) (e - s));
-			p = tmp + (unsigned long) (e - s);
-		}
-		*p++ = '/';
-		memcpy(p, bname, blen);
-		*(p += blen) = '\0';
-		if (access(tmp, X_OK) == 0) {
-			resolved = tmp;
-			break;
-		}
-		xfree(tmp);
-	}
+                dbuf->pos = dbuf->base + old_size;
+        }
 
-	if (!resolved &&
-	    (!*path || *(s - 1) == ':')) {
-		tmp = xmalloc(1UL + 1UL + blen + 1UL);
-		tmp[0] = '.';
-		tmp[1] = '/';
-		strcpy(tmp + 2, bname);
-		if (access(tmp, X_OK) == 0)
-			resolved = tmp;
-		else
-			xfree(tmp);
-	}
-
-	return resolved;
+        return dbuf->pos;
 }
 
-static void abort_no_mem(unsigned long size)
+int   dbuf_printf(dbuf_t *dbuf, const char *fmt, ...)
 {
-	static const char msg_1[] = "Failed to allocate ";
-	static const char msg_2[] = " bytes of memory\n";
-	char buf[64], *p = buf, *s;
-	unsigned long len;
-	long unused;
+        va_list ap;
+        char _mem[1024], *ptr;
+        int ret_val;
+        unsigned long size;
 
-	unused = write(STDERR_FILENO, msg_1, sizeof(msg_1) - 1), (void) unused;
+        va_start(ap, fmt);
+        ret_val = vsnprintf(_mem, sizeof(_mem), fmt, ap);
+        va_end(ap);
 
-	do {
-		int d = (int) (size % 10UL) + '0';
-		*p++ = d;
-		size /= 10UL;
-	} while (p < buf + sizeof(buf) && size > 0);
+        if (ret_val < 0)
+                return -1;
 
-	len = (unsigned long) (p - buf);
+        size = (unsigned long) ret_val + 1UL;
 
-	for (p--, s = buf; p > s; p--, s++) {
-		char tmp;
-		tmp = *p;
-		*p = *s;
-		*s = tmp;
-	}
+        /* This allocation is accounted in @dbuf itself.
+           It will go away when we free the whole dynamic buffer. */
+        if ((ptr = dbuf_alloc(dbuf, size)) == NULL)
+                return -1;
 
-	unused = write(STDERR_FILENO, buf, len), (void) unused;
+        if (size <= sizeof(_mem)) {
+                memcpy(ptr, _mem, size);
+        } else {
+                va_start(ap, fmt);
+                ret_val = vsnprintf(ptr, size, fmt, ap);
+                va_end(ap);
 
-	unused = write(STDERR_FILENO, msg_2, sizeof(msg_2) - 1), (void) unused;
+                if (ret_val < 0)
+                        return -1;
 
-	_exit(E_NOMEM);
+                /* Sanity check */
+                if ((unsigned long) ret_val + 1UL != size)
+                        return -1;
+        }
+
+        dbuf->pos += ret_val;
+
+        return ret_val;
 }
 
-void *xmalloc(unsigned long size)
+void  dbuf_free(dbuf_t *dbuf)
 {
-	void *ptr;
-
-	if (size >= (~0UL >> 1) ||
-	    !(ptr = malloc(size))) {
-		abort_no_mem(size);
-	}
-
-	return ptr;
-}
-
-void *xrealloc(void *ptr, unsigned long size)
-{
-	void *tmp_ptr;
-
-	if (size >= (~0UL >> 1) ||
-	    !(tmp_ptr = realloc(ptr, size))) {
-		xfree(ptr);
-		abort_no_mem(size);
-	}
-
-	return tmp_ptr;
-}
-
-char *xstrdup(const char *s)
-{
-	char *d;
-	unsigned long slen;
-
-	if (!s)
-		return 0;
-
-	slen = strlen(s) + 1UL;
-	d = xmalloc(slen);
-	memcpy(d, s, slen);
-
-	return d;
-}
-
-void xfree(void *ptr)
-{
-	if (ptr)
-		free(ptr);
-}
-
-void dyn_buf_init(dyn_buf_t *buf)
-{
-	if (!buf)
-		return;
-	buf->pos = buf->base = buf->_mem;
-	buf->capacity = sizeof(buf->_mem) / sizeof(buf->_mem[0]);
-}
-
-/* Ensures, @buf is able to hold at least @to_reserve bytes of data.
-   Returns pointer to the start of allocated space. */
-char *dyn_buf_reserve(dyn_buf_t *buf, unsigned long to_reserve)
-{
-	unsigned long cur_sz, req_sz;
-
-	if (!buf)
-		return 0;
-	cur_sz = buf->pos - buf->base;
-	req_sz = cur_sz + to_reserve;
-	if (req_sz > buf->capacity) {
-		while (req_sz > (buf->capacity *= 2UL)) ;
-		if (buf->base == buf->_mem) {
-			buf->base = xmalloc(buf->capacity);
-			memcpy(buf->base, buf->_mem, cur_sz);
-			buf->pos = buf->base + cur_sz;
-		} else {
-			buf->base = xrealloc(buf->base, buf->capacity);
-			buf->pos = buf->base + cur_sz;
-		}
-	}
-
-	return buf->pos;
-}
-
-int dyn_buf_printf(dyn_buf_t *buf, const char *fmt, ...)
-{
-	char scratch_mem[1024], *pos;
-	va_list ap;
-	int rv;
-	unsigned long req_sz;
-
-	if (!buf)
-		return -1;
-	va_start(ap, fmt);
-	rv = vsnprintf(scratch_mem, sizeof(scratch_mem), fmt, ap);
-	va_end(ap);
-
-	if (rv < 0)
-		return -1;
-	req_sz = (unsigned long) rv + 1UL;
-	pos = dyn_buf_reserve(buf, req_sz);
-	if (req_sz <= sizeof(scratch_mem)) {
-		memcpy(pos, scratch_mem, req_sz);
-	} else {
-		va_start(ap, fmt);
-		rv = vsnprintf(pos, req_sz, fmt, ap);
-		va_end(ap);
-
-		if  (rv < 0)
-			return -1;
-
-		if ((unsigned long) rv + 1UL != req_sz)
-			return -1;
-	}
-
-	buf->pos += req_sz - 1UL;
-	return rv;
-}
-
-void dyn_buf_free(dyn_buf_t *buf)
-{
-	if (!buf)
-		return;
-	if (buf->base != buf->_mem) {
-		xfree(buf->base);
-		buf->base = buf->_mem;
-		buf->capacity = sizeof(buf->_mem) / sizeof(buf->_mem[0]);
-	}
-	buf->pos = buf->base;
-}
-
-/* Routines handling linemarker directive in preprocessed code.
-   Each has following structure:
-   '#' <unsigned number> '"' <quoted string> '"' {<unsigned number>}
- */
-
-typedef struct {
-	unsigned long linenum;
-	char *filename;
-	unsigned long flags;
-} linemarker_t;
-
-static int parse_ul(const char *p,
-                    const char *const limit,
-                    unsigned long *valp,
-                    const char **nextp)
-{
-	unsigned long old_val, val = 0UL;
-
-	for (;
-	     !is_end_of_line(p, limit) && '0' <= *p && *p <= '9';
-	     p++) {
-		old_val = val;
-		val = val * 10UL + (unsigned long) (*p - '0');
-		if (val < old_val)
-			return -1; /* Too many digits: 
-                                      UL type can't hold this number */
-	}
-
-	if (!is_end_of_line(p, limit) &&
-	    !is_whitespace(*p))
-		return -1; /* No whitespace (or NL) is found after sequence of digits */
-
-	*valp = val;
-	*nextp = p;
-	return 0;
-}
-
-static int parse_quoted_string(const char *p,
-                               const char *const limit,
-                               char quote,
-                               char **valp,
-                               const char **nextp)
-{
-	const char *src;
-	char *val, *dst;
-	unsigned long nalloc = 1UL;
-
-	if (*p != quote)
-		return -1;
-
-	src = ++p;
-	for (; !is_end_of_line(p, limit) && *p != quote; nalloc++, p++)
-		if (*p == '\\') {
-			p++;
-			if (is_end_of_line(p, limit))
-				return -1; /* Invalid escaping with backslash */
-		}
-
-	if (is_end_of_line(p, limit))
-		return -1; /* Couldn't find terminating quote character */
-
-	val = dst = xmalloc(nalloc);
-
-	for (; src < p;) {
-		if (*src == '\\')
-			src++;
-		*dst++ = *src++;
-	}
-	*dst = '\0';
-
-	*valp = val;
-	*nextp = p + 1; /* Skip terminating quote character */
-	return 0;
-}
-
-static int read_linemarker(const char *p,
-                           const char *const limit,
-                           linemarker_t *lm,
-                           const char **nextp)
-{
-	linemarker_t lm_mem;
-	const char *next;
-	enum {
-		S_X_HASH,     /* Expecting '#' character */
-		S_X_LINENUM,  /* Expecting integer which is linenum */
-		S_X_FILENAME, /* Expecting string which is filename */
-		S_X_FLAG,     /* Expecting integer which is flag */
-		S_FAIL,       /* Failed to parse a linemarker */
-	} state = S_X_HASH;
-	memset(&lm_mem, 0, sizeof(lm_mem));
-
-	for (; state != S_FAIL && !is_end_of_line(p, limit); p = next) {
-		for (next = p;
-		     !is_end_of_line(next, limit) && is_whitespace(*next);
-		     next++) ;
-		if (next != p)
-			continue;
-
-		switch (state) {
-
-		case S_X_HASH: {
-			if (*p != '#')
-				state = S_FAIL;
-			else
-				state = S_X_LINENUM;
-			break;
-		}
-
-		case S_X_LINENUM: {
-			if (parse_ul(p, limit, &lm_mem.linenum, &next) == 0) {
-				state = S_X_FILENAME;
-				continue;
-			}
-
-			state = S_FAIL;
-			break;
-		}
-
-		case S_X_FILENAME: {
-			if (parse_quoted_string(p, limit, '"', &lm_mem.filename, &next) == 0) {
-				state = S_X_FLAG;
-				continue;
-			}
-
-			state = S_FAIL;
-			break;
-		}
-
-		case S_X_FLAG: {
-			unsigned long flag;
-
-			if (parse_ul(p, limit, &flag, &next) == 0) {
-				if (sizeof(lm_mem.flags) * 8UL >= flag &&
-				    flag >= 1UL)
-					lm_mem.flags |= 1UL << (flag - 1UL);
-				else
-					state = S_FAIL;
-				continue;
-			}
-
-			state = S_FAIL;
-			break;
-		}
-
-		case S_FAIL: break;
-
-		}
-
-		next = p + 1;
-	}
-
-	if (state == S_X_FLAG) {
-		*lm = lm_mem;
-		*nextp = next;
-		return 0;
-	} else {
-		if (lm_mem.filename)
-			xfree(lm_mem.filename);
-		return -1;
-	}
-}
-
-dyn_buf_t *process_linemarkers(const char *const base,
-                               unsigned long size,
-                               const char *dump_file)
-{
-	dyn_buf_t *buf, *dump_buf = 0;
-	const char *p = base, *const limit = base + size, *next;
-	const char *filename;
-	unsigned long linenum;
-	int skip = 0;
-
-	buf = xmalloc(sizeof(*buf));
-	dyn_buf_init(buf);
-
-	if (dump_file) {
-		dump_buf = xmalloc(sizeof(*dump_buf));
-		dyn_buf_init(dump_buf);
-	}
-
-	for (filename = 0, linenum = 1;
-	     p < limit;
-	     p = next) {
-		linemarker_t lm_mem;
-		memset(&lm_mem, 0, sizeof(lm_mem));
-
-		if (read_linemarker(p, limit, &lm_mem, &next) == 0) {
-			if (!filename)
-				filename = lm_mem.filename;
-			else {
-				skip = strcmp(lm_mem.filename, filename) != 0;
-				xfree(lm_mem.filename);
-			}
-
-			if (!skip) {
-				if (lm_mem.linenum < linenum) {
-					unsigned long nr_stripped = linenum - lm_mem.linenum;
-					char *p = buf->pos;
-
-					while (--p >= buf->base)
-						if (*p == '\n') {
-							*p = ' ';
-							if (--nr_stripped == 0UL)
-								break;
-						}
-
-					if (nr_stripped != 0UL) {
-						/* File is malformed */
-						if (filename)
-							xfree((void *) filename);
-						if (dump_buf) {
-							dyn_buf_free(dump_buf);
-							xfree(dump_buf);
-						}
-						dyn_buf_free(buf);
-						xfree(buf);
-						return 0;
-					}
-
-					linenum = lm_mem.linenum;
-				} else {
-					for (;
-					     linenum < lm_mem.linenum;
-					     linenum++)
-						dyn_buf_printf(buf, "\n");
-				}
-			}
-
-			if (next < limit)
-				next++;
-			continue;
-		} else {
-			for (next = p;
-			     !is_end_of_line(next, limit);
-			     next++) ;
-			if (next < limit)
-				next++;
-		}
-
-		if (skip) {
-			if (dump_buf)
-				dyn_buf_printf(dump_buf, "%.*s", (int) (next - p), p);
-			continue;
-		}
-		dyn_buf_printf(buf, "%.*s", (int) (next - p), p);
-		linenum++;
-	}
-
-	if (filename)
-		xfree((void *) filename);
-	if (dump_buf) {
-		int fd;
-		unsigned long size;
-
-		size = dump_buf->pos - dump_buf->base;
-		size = trim_whitespaces(dump_buf->base, size);
-		size = shrink_lines(dump_buf->base, size);
-
-		if ((fd = open(dump_file, O_CREAT | O_WRONLY | O_TRUNC, 0644)) >= 0) {
-			long rv;
-
-			if ((rv = write(fd, dump_buf->base, size)) < 0L ||
-			    (unsigned long) rv != size)
-				unlink(dump_file);
-			close(fd);
-		}
-
-		dyn_buf_free(dump_buf);
-		xfree(dump_buf);
-	}
-
-	return buf;
-}
-
-/*
-	Trims whitespaces leaving only one instance between adjacent tokens
-	(except initial whitespaces in a line).
-	Comment is considered one whitespace character.
-	Everything is done in-place.
-	Returns size of trimmed content.
- */
-unsigned long trim_whitespaces(char *const base, unsigned long size)
-{
-	char *src, *dst, *saved_dst, *const limit = base + size, quote = '\0';
-	int seen_token = 0, init_ws = 1;
-	enum {
-		S_WS,
-		S_TOKEN,
-		S_IN_QUOTES,
-		S_IN_ML_COMMENT,
-		S_IN_OL_COMMENT,
-	} state = S_WS;
-
-	for (src = saved_dst = dst = base;
-	     src < limit;
-	     src++) {
-		switch (state) {
-		case S_WS:
-			if (is_whitespace(*src)) {
-				if (init_ws)
-					*dst++ = *src;
-				continue;
-			}
-
-			init_ws = 0;
-
-			if (*src == '\n') {
-				if (!seen_token)
-					dst = saved_dst;
-				*dst++ = '\n';
-				saved_dst = dst;
-
-				seen_token = 0;
-				init_ws = 1;
-				continue;
-			}
-
-			if (*src == '/') {
-				char lookahead = (src + 1 < limit) ? *(src + 1) : '\0';
-
-				if (lookahead == '*') {
-					src++;
-					state = S_IN_ML_COMMENT;
-					continue;
-				} else if (lookahead == '/') {
-					src++;
-					state = S_IN_OL_COMMENT;
-					continue;
-				}
-			}
-
-			if (seen_token)
-				*dst++ = ' ';
-
-			seen_token = 1;
-			if (*src == '"' || *src == '\'') {
-				quote = *src;
-				state = S_IN_QUOTES;
-			} else {
-				state = S_TOKEN;
-			}
-			*dst++ = *src;
-			continue;
-
-		case S_TOKEN:
-			if (is_whitespace(*src)) {
-				state = S_WS;
-				continue;
-			}
-
-			if (*src == '\n') {
-				*dst++ = '\n';
-				saved_dst = dst;
-
-				seen_token = 0;
-				init_ws = 1;
-				state = S_WS;
-				continue;
-			}
-
-			if (*src == '/') {
-				char lookahead = (src + 1 < limit) ? *(src + 1) : '\0';
-
-				if (lookahead == '*') {
-					src++;
-					state = S_IN_ML_COMMENT;
-					continue;
-				} else if (lookahead == '/') {
-					src++;
-					state = S_IN_OL_COMMENT;
-					continue;
-				}
-			}
-
-			if (*src == '"' || *src == '\'') {
-				quote = *src;
-				state = S_IN_QUOTES;
-			} else {
-				;
-			}
-			*dst++ = *src;
-			continue;
-
-		case S_IN_QUOTES:
-			/* Handle escaping */
-			if (*src == '\\') {
-				if (src + 1 < limit)
-					*dst++ = *src++;
-			} else if (*src == quote) {
-				quote = '\0';
-				state = S_TOKEN;
-			}
-
-			*dst++ = *src;
-			continue;
-
-		case S_IN_ML_COMMENT:
-			if (*src == '\n') {
-				if (!seen_token)
-					dst = saved_dst;
-				*dst++ = '\n';
-				saved_dst = dst;
-
-				seen_token = 0;
-				init_ws = 1;
-			} else if (*src == '*') {
-				char lookahead = (src + 1 < limit) ? *(src + 1) : '\0';
-
-				if (lookahead == '/') {
-					src++;
-					state = S_WS;
-				}
-			}
-
-			continue;
-
-		case S_IN_OL_COMMENT:
-			if (*src == '\n') {
-				if (!seen_token)
-					dst = saved_dst;
-				*dst++ = '\n';
-				saved_dst = dst;
-
-				seen_token = 0;
-				init_ws = 1;
-				state = S_WS;
-			}
-
-			continue;
-		}
-	}
-
-	if (!seen_token)
-		dst = saved_dst;
-
-	return (unsigned long) (dst - base);
-}
-
-/* Removes extra empty lines leaving only one */
-unsigned long shrink_lines(char *const base, unsigned long size)
-{
-	char *src, *dst, *const limit = base + size;
-	unsigned long nl_count;
-
-	for (src = dst = base, nl_count = 0UL;
-	     src < limit;
-	     src++) {
-		if (*src == '\n') {
-			if (nl_count < 2UL) {
-				nl_count++;
-				*dst++ = *src;
-			} else {
-				; /* No copy */
-			}
-		} else {
-			nl_count = 0UL;
-			*dst++ = *src;
-		}
-	}
-
-	return (unsigned long) (dst - base);
+        if (dbuf == NULL)
+                return;
+
+        if (dbuf->base != dbuf->_mem) {
+                xfree(dbuf->base);
+                dbuf->base = dbuf->_mem;
+                dbuf->capacity = sizeof(dbuf->_mem) / sizeof(dbuf->_mem[0]);
+        }
+
+        dbuf->pos = dbuf->base;
 }
