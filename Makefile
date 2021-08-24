@@ -1,3 +1,5 @@
+export LC_ALL := C
+
 SOURCES := gcc-wrapper.c util.c
 OBJECTS := $(patsubst %.c,%.o,$(SOURCES))
 HEADERS := common.h
@@ -7,13 +9,15 @@ CC := gcc
 CFLAGS := -O2 -Wall -Wextra
 RM := rm
 
-all: $(PROGRAM)
-clean:
-	$(RM) -f -v $(PROGRAM) $(OBJECTS)
-test:
-	./tests/run_tests.sh
-
 .PHONY: all clean test
+
+all: $(PROGRAM)
+
+clean:
+	$(RM) -v -f $(PROGRAM) $(OBJECTS)
+
+test:
+	$(MAKE) -C tests/ test
 
 $(PROGRAM): $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $^

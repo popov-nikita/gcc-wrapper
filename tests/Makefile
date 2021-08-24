@@ -1,0 +1,18 @@
+TESTS := test-linemarkers
+
+CC := gcc
+CFLAGS := -O2 -Wall -Wextra
+RM := rm
+
+SOURCES := $(patsubst %,%.c,$(TESTS))
+test-linemarkers_DEPS := ../util.c ../parse.c
+
+.PHONY: test $(TESTS)
+
+test: $(TESTS)
+
+$(TESTS):
+	@echo '  $(@) >>>>'
+	@$(CC) $(CFLAGS) -o $(@) $(@).c $($(@)_DEPS)
+	@set +e; ./$(@); rc="$$?"; $(RM) -f $(@); echo '  <<<< $(@)'; exit "$$rc"
+

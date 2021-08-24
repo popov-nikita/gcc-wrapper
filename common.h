@@ -1,65 +1,92 @@
-#ifndef		COMMON_H
-#define		COMMON_H	1
+#ifndef COMMON_H
+#define COMMON_H
 
-#include	<stdarg.h>
-#include	<sys/types.h>
-#include	<sys/stat.h>
-#include	<sys/mman.h>
-#include	<sys/wait.h>
-#include	<fcntl.h>
-#include	<unistd.h>
-#include	<stdio.h>
-#include	<stdlib.h>
-#include	<string.h>
+/*
+	EPERM		 1
+	ENOENT		 2
+	ESRCH		 3
+	EINTR		 4
+	EIO		 5
+	ENXIO		 6
+	E2BIG		 7
+	ENOEXEC		 8
+	EBADF		 9
+	ECHILD		10
+	EAGAIN		11
+	ENOMEM		12
+	EACCES		13
+	EFAULT		14
+	ENOTBLK		15
+	EBUSY		16
+	EEXIST		17
+	EXDEV		18
+	ENODEV		19
+	ENOTDIR		20
+	EISDIR		21
+	EINVAL		22
+	ENFILE		23
+	EMFILE		24
+	ENOTTY		25
+	ETXTBSY		26
+	EFBIG		27
+	ENOSPC		28
+	ESPIPE		29
+	EROFS		30
+	EMLINK		31
+	EPIPE		32
+	EDOM		33
+	ERANGE		34
+ */
+#include <errno.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <limits.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-static int is_whitespace(char c)
-{
-	return (c == ' '  || c == '\f' ||
-	        c == '\r' || c == '\t' || c == '\v');
-}
+/* util.c */
 
-static int is_end_of_line(const char *p, const char *const limit)
-{
-	return p >= limit || *p == '\n';
-}
+void *xmalloc(unsigned long size);
+void *xrealloc(void *ptr, unsigned long size);
+void  xfree(void *ptr);
+char *xstrdup(const char *s);
 
-enum exit_code {
-	E_SUCCESS   = 0,
-	E_SRCH      = 1,
-	E_MAL_FILE  = 2,
-	E_NOMEM     = 100,
-	E_IO        = 101,
-	E_PROC      = 102,
-};
+char *locate_file(const char *name);
 
 int load_file(const char *path, void **basep, unsigned long *sizep);
 void unload_file(void *base, unsigned long size);
 
-char *get_basename(const char *path);
-char *locate_bin_file(const char *bname);
+typedef struct {
+        char *base, *pos;
+        unsigned long capacity;
+        char _mem[sizeof(void *) << 4UL];
+} dbuf_t;
 
-void *xmalloc(unsigned long size);
-void *xrealloc(void *ptr, unsigned long size);
-char *xstrdup(const char *s);
-void xfree(void *ptr);
+void  dbuf_init(dbuf_t *dbuf);
+char *dbuf_alloc(dbuf_t *dbuf, unsigned long size);
+int   dbuf_printf(dbuf_t *dbuf, const char *fmt, ...);
+void  dbuf_free(dbuf_t *dbuf);
+
+/* parse.c */
 
 typedef struct {
-	char *base, *pos;
-	unsigned long capacity;
-	char _mem[sizeof(void *) << 4UL];
-} dyn_buf_t;
+        unsigned long linenum;
+        char *filename;
+        unsigned long info;
+} linemarker_t;
 
-void dyn_buf_init(dyn_buf_t *buf);
-char *dyn_buf_reserve(dyn_buf_t *buf, unsigned long to_reserve);
-int dyn_buf_printf(dyn_buf_t *buf, const char *fmt, ...);
-void dyn_buf_free(dyn_buf_t *buf);
-
-dyn_buf_t *process_linemarkers(const char *const base,
-                               unsigned long size,
-                               const char *dump_file);
-unsigned long trim_whitespaces(char *const base, unsigned long size);
-unsigned long shrink_lines(char *const base, unsigned long size);
-
-extern const char *prog_basename;
+int is_eol(const char *chp, const char *const limit);
+int is_ws(char ch);
+int read_linemarker(const char *chp,
+                    const char *const limit,
+                    linemarker_t *lm,
+                    const char **nxtp);
 
 #endif
