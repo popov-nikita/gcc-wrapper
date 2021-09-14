@@ -47,11 +47,14 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* util.c */
+
+void log_failure(int fd, int err_num, const char *fmt, ...);
 
 void *xmalloc(unsigned long size);
 void *xrealloc(void *ptr, unsigned long size);
@@ -73,6 +76,10 @@ void  dbuf_init(dbuf_t *dbuf);
 char *dbuf_alloc(dbuf_t *dbuf, unsigned long size);
 int   dbuf_printf(dbuf_t *dbuf, const char *fmt, ...);
 void  dbuf_free(dbuf_t *dbuf);
+
+int run_cmd(char *argv[],
+            char **bufp,
+            unsigned long *sizep);
 
 /* parse.c */
 
