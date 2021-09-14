@@ -1,5 +1,72 @@
 #include "common.h"
 
+void log_failure(int fd, int err_num, const char *fmt, ...)
+{
+        va_list ap;
+        char _mem[4096], *p;
+        unsigned long nr_avail;
+        long rv;
+        int saved_errno;
+
+        saved_errno = errno;
+
+        if (fd < 0)
+                fd = STDERR_FILENO;
+        if (err_num < 0)
+                err_num = saved_errno;
+
+        p = _mem;
+        nr_avail = sizeof(_mem);
+
+        if (err_num != 0) {
+                const char *err_dsc;
+
+                errno = 0;
+                err_dsc = strerror(err_num);
+                if (err_dsc == NULL || errno != 0)
+                        err_dsc = "Unknown error";
+
+                rv = snprintf(p,
+                              nr_avail,
+                              "Failed with \"%s\"\n",
+                              err_dsc);
+                if (rv <= 0L || (unsigned long) rv >= nr_avail)
+                        goto out;
+                p += rv;
+                nr_avail -= (unsigned long) rv;
+        }
+
+        va_start(ap, fmt);
+        rv = vsnprintf(p,
+                       nr_avail,
+                       fmt,
+                       ap);
+        va_end(ap);
+        if (rv <= 0L || (unsigned long) rv >= nr_avail)
+                goto out;
+        p += rv;
+        nr_avail -= (unsigned long) rv;
+
+        if (p[-1L] != '\n') {
+                *p++ = '\n';
+                nr_avail--;
+        }
+
+        p = _mem;
+        nr_avail = sizeof(_mem) - nr_avail;
+        do {
+                rv = write(fd, p, nr_avail);
+                if (rv <= 0L || (unsigned long) rv > nr_avail)
+                        break;
+
+                p += rv;
+                nr_avail -= (unsigned long) rv;
+        } while (nr_avail > 0UL);
+
+out:
+        errno = saved_errno;
+}
+
 static void panic_no_memory(unsigned long size)
 {
         static const char msg1[] = "Failed to allocate ";
@@ -293,4 +360,268 @@ void  dbuf_free(dbuf_t *dbuf)
         }
 
         dbuf->pos = dbuf->base;
+}
+
+static void run_child(char *argv[],
+                      int dat_fd,
+                      int log_fd)
+{
+        extern char **environ;
+
+        /* dup2 duplicates file descriptor
+           with CLOEXEC bit cleared for the copy. */
+        if (dup2(dat_fd, STDOUT_FILENO) < 0) {
+                log_failure(log_fd,
+                            -1,
+                            "In %s\nAt call \"dup2\"",
+                            __func__);
+                goto fail;
+        }
+
+        /* CLOEXEC bit ensures our parent will see
+           the EOF in log pipe. */
+        fcntl(dat_fd, F_SETFD, FD_CLOEXEC);
+        fcntl(log_fd, F_SETFD, FD_CLOEXEC);
+
+        execve(argv[0], argv, environ);
+
+        log_failure(log_fd,
+                    -1,
+                    "In %s\nAt call \"execve\"",
+                    __func__);
+
+fail:
+        _exit(-1);
+}
+
+int run_cmd(char *argv[],
+            char **bufp,
+            unsigned long *sizep)
+{
+        int log_fd[2] = { -1, -1 };
+        int dat_fd[2] = { -1, -1 };
+        int status = 0, exit_code;
+        long pid;
+        char _mem[4096], *p;
+        unsigned long nr_avail;
+        long rv;
+        char *buf = NULL, *tmp;
+        unsigned long size = 0UL;
+
+        /*
+          We create two pipes here:
+          + One pipe replaces stdout of the child process;
+          + Other pipe signals whether system error has occured.
+            during process creation.
+          Log pipe is going away upon successful call to execve()
+          which is ensured with CLOEXEC file descriptor bit.
+         */
+        if (pipe(dat_fd) < 0) {
+                log_failure(-1,
+                            -1,
+                            "In %s\nAt call \"pipe(dat_fd)\"",
+                            __func__);
+                return -1;
+        }
+
+        if (pipe(log_fd) < 0) {
+                log_failure(-1,
+                            -1,
+                            "In %s\nAt call \"pipe(log_fd)\"",
+                            __func__);
+                close(dat_fd[0]);
+                close(dat_fd[1]);
+                return -1;
+        }
+
+        if ((pid = fork()) < 0L) {
+                log_failure(-1,
+                            -1,
+                            "In %s\nAt call \"fork\"",
+                            __func__);
+                close(dat_fd[0]);
+                close(dat_fd[1]);
+                close(log_fd[0]);
+                close(log_fd[1]);
+                return -1;
+        }
+
+        if (pid == 0L) {
+                close(dat_fd[0]);
+                close(log_fd[0]);
+                run_child(argv, dat_fd[1], log_fd[1]);
+                /* Unreachable */
+                for (;;) ;
+        }
+
+        close(dat_fd[1]);
+        close(log_fd[1]);
+
+        /* We avoid printing error messages to console in the child process
+           so no message interleaving takes place. */
+        p = _mem;
+        nr_avail = sizeof(_mem);
+        do {
+                rv = read(log_fd[0], p, nr_avail);
+
+                if (rv < 0L || (unsigned long) rv > nr_avail) {
+                        int ignored;
+
+                        log_failure(-1,
+                                    -1,
+                                    "In %s\nAt call \"read(log_fd)\"",
+                                    __func__);
+
+                        kill(pid, SIGKILL);
+                        waitpid(pid, &ignored, 0);
+
+                        close(dat_fd[0]);
+                        close(log_fd[0]);
+                        return -1;
+                }
+
+                if (rv == 0L)
+                        break;
+
+                p += rv;
+                nr_avail -= (unsigned long) rv;
+        } while (nr_avail > 0UL);
+
+        close(log_fd[0]);
+
+        if (p != _mem) {
+                int ignored;
+
+                kill(pid, SIGKILL);
+                waitpid(pid, &ignored, 0);
+
+                close(dat_fd[0]);
+
+                /* Print error message produced by our child */
+                log_failure(-1,
+                            0,
+                            "%.*s",
+                            (int) (p - _mem),
+                            _mem);
+                return -1;
+        }
+
+        do {
+                unsigned long this_size;
+
+                p = _mem;
+                nr_avail = sizeof(_mem);
+                do {
+                        rv = read(dat_fd[0], p, nr_avail);
+
+                        if (rv < 0L || (unsigned long) rv > nr_avail) {
+                                int ignored;
+
+                                log_failure(-1,
+                                            -1,
+                                            "In %s\nAt call \"read(dat_fd)\"",
+                                            __func__);
+
+                                kill(pid, SIGKILL);
+                                waitpid(pid, &ignored, 0);
+
+                                close(dat_fd[0]);
+
+                                if (buf)
+                                        free(buf);
+                                return -1;
+                        }
+
+                        if (rv == 0L)
+                                break;
+
+                        p += rv;
+                        nr_avail -= (unsigned long) rv;
+                } while (nr_avail > 0UL);
+
+                if ((this_size = sizeof(_mem) - nr_avail) == 0UL)
+                        break;
+
+                tmp = realloc(buf, size + this_size);
+                if (tmp == NULL) {
+                        int ignored;
+
+                        log_failure(-1,
+                                    -1,
+                                    "In %s\nAt call \"realloc\"",
+                                    __func__);
+
+                        kill(pid, SIGKILL);
+                        waitpid(pid, &ignored, 0);
+
+                        close(dat_fd[0]);
+
+                        if (buf)
+                                free(buf);
+                        return -1;
+                }
+                buf = tmp;
+
+                memcpy(buf + size, _mem, this_size);
+                size += this_size;
+                /* If nr_avail == 0 then
+                   there may be more data.
+                   Anyway, at least one read is required
+                   to find it out. */
+        } while (nr_avail == 0UL);
+
+        close(dat_fd[0]);
+
+        if ((rv = waitpid(pid, &status, 0)) < 0L) {
+                log_failure(-1,
+                            -1,
+                            "In %s\nAt call \"waitpid\"",
+                            __func__);
+
+                kill(pid, SIGKILL);
+
+                if (buf)
+                        free(buf);
+                return -1;
+        }
+
+        if (rv != pid || !(WIFEXITED(status) || WIFSIGNALED(status))) {
+                log_failure(-1,
+                            EFAULT,
+                            "In %s\nAt call \"waitpid\"",
+                            __func__);
+
+                kill(pid, SIGKILL);
+
+                if (buf)
+                        free(buf);
+                return -1;
+        }
+
+        if (WIFSIGNALED(status)) {
+                log_failure(-1,
+                            0,
+                            "Child %ld is killed by a signal\n",
+                            pid);
+
+                if (buf)
+                        free(buf);
+                return -1;
+	}
+
+        if ((exit_code = WEXITSTATUS(status)) != 0) {
+                log_failure(-1,
+                            0,
+                            "Child %ld has returned %d\n",
+                            pid,
+                            exit_code);
+
+                if (buf)
+                        free(buf);
+                return -1;
+        }
+
+        *bufp = buf;
+        *sizep = size;
+        return 0;
 }
