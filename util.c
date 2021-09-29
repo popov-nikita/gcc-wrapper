@@ -67,47 +67,19 @@ out:
         errno = saved_errno;
 }
 
-static void panic_no_memory(unsigned long size)
-{
-        static const char msg1[] = "Failed to allocate ";
-        static const unsigned long msg1_len = sizeof(msg1) - 1UL;
-        static const char msg2[] = " bytes of memory\n";
-        static const unsigned long msg2_len = sizeof(msg2) - 1UL;
-        char _mem[64], *p1 = _mem, *p2;
-        long unused;
-
-        unused = write(STDERR_FILENO, msg1, msg1_len), (void) unused;
-
-        do {
-                int d = (int) (size % 10UL) + '0';
-                *p1++ = d;
-                size /= 10UL;
-        } while (p1 < _mem + sizeof(_mem) && size > 0);
-
-        size = (unsigned long) (p1 - _mem);
-
-        for (p1--, p2 = _mem; p1 > p2; p1--, p2++) {
-                char tmp;
-                tmp = *p1;
-                *p1 = *p2;
-                *p2 = tmp;
-        }
-
-        unused = write(STDERR_FILENO, _mem, size), (void) unused;
-
-        unused = write(STDERR_FILENO, msg2, msg2_len), (void) unused;
-
-        _exit(ENOMEM);
-}
-
 void *xmalloc(unsigned long size)
 {
         void *ret;
 
         ret = malloc(size);
 
-        if (ret == NULL)
-                panic_no_memory(size);
+        if (ret == NULL) {
+                log_failure(-1,
+                            0,
+                            "Failed to allocate %lu bytes of memory",
+                            size);
+                _exit(ENOMEM);
+        }
 
         return ret;
 }
@@ -119,8 +91,12 @@ void *xrealloc(void *ptr, unsigned long size)
         ret = realloc(ptr, size);
 
         if (ret == NULL) {
+                log_failure(-1,
+                            0,
+                            "Failed to re-allocate %lu bytes of memory",
+                            size);
                 xfree(ptr);
-                panic_no_memory(size);
+                _exit(ENOMEM);
         }
 
         return ret;
