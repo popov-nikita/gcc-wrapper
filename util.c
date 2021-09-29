@@ -113,8 +113,13 @@ char *xstrdup(const char *s)
         char *d;
         unsigned long size;
 
-        if (s == NULL)
-                return 0;
+        if (s == NULL) {
+                log_failure(-1,
+                            0,
+                            "Invalid usage: "
+                            "NULL passed to strdup in the argument");
+                _exit(EINVAL);
+        }
 
         size = strlen(s) + 1UL;
         d = xmalloc(size);
