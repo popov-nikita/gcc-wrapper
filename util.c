@@ -588,7 +588,7 @@ int run_cmd(char *argv[],
                 if (buf)
                         free(buf);
                 return -1;
-	}
+        }
 
         if ((exit_code = WEXITSTATUS(status)) != 0) {
                 log_failure(-1,
