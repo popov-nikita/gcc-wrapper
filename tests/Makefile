@@ -3,7 +3,7 @@ TESTS := test-linemarkers \
          test-run-cmd
 
 CC := gcc
-CFLAGS := -O2 -Wall -Wextra
+CFLAGS := -O2 -Wall -Wextra -fsanitize=undefined
 RM := rm
 
 SOURCES := $(patsubst %,%.c,$(TESTS))
@@ -17,5 +17,5 @@ test: $(TESTS)
 
 $(TESTS):
 	@echo '  $(@) >>>>'
-	@$(CC) $(CFLAGS) -o $(@) $(@).c $($(@)_DEPS)
+	$(CC) $(CFLAGS) -o $(@) $(@).c $($(@)_DEPS)
 	@set +e; ./$(@); rc="$$?"; $(RM) -f $(@); echo '  <<<< $(@)'; exit "$$rc"

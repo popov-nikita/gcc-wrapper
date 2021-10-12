@@ -1,71 +1,8 @@
 #include "common.h"
 
-void log_failure(int fd, int err_num, const char *fmt, ...)
-{
-        va_list ap;
-        char _mem[4096], *p;
-        unsigned long nr_avail;
-        long rv;
-        int saved_errno;
-
-        saved_errno = errno;
-
-        if (fd < 0)
-                fd = STDERR_FILENO;
-        if (err_num < 0)
-                err_num = saved_errno;
-
-        p = _mem;
-        nr_avail = sizeof(_mem);
-
-        if (err_num != 0) {
-                const char *err_dsc;
-
-                errno = 0;
-                err_dsc = strerror(err_num);
-                if (err_dsc == NULL || errno != 0)
-                        err_dsc = "Unknown error";
-
-                rv = snprintf(p,
-                              nr_avail,
-                              "Failed with \"%s\"\n",
-                              err_dsc);
-                if (rv <= 0L || (unsigned long) rv >= nr_avail)
-                        goto out;
-                p += rv;
-                nr_avail -= (unsigned long) rv;
-        }
-
-        va_start(ap, fmt);
-        rv = vsnprintf(p,
-                       nr_avail,
-                       fmt,
-                       ap);
-        va_end(ap);
-        if (rv <= 0L || (unsigned long) rv >= nr_avail)
-                goto out;
-        p += rv;
-        nr_avail -= (unsigned long) rv;
-
-        if (p[-1L] != '\n') {
-                *p++ = '\n';
-                nr_avail--;
-        }
-
-        p = _mem;
-        nr_avail = sizeof(_mem) - nr_avail;
-        do {
-                rv = write(fd, p, nr_avail);
-                if (rv <= 0L || (unsigned long) rv > nr_avail)
-                        break;
-
-                p += rv;
-                nr_avail -= (unsigned long) rv;
-        } while (nr_avail > 0UL);
-
-out:
-        errno = saved_errno;
-}
+/******************************
+ * Augmented memory allocator *
+ ******************************/
 
 void *xmalloc(unsigned long size)
 {
@@ -74,10 +11,10 @@ void *xmalloc(unsigned long size)
         ret = malloc(size);
 
         if (ret == NULL) {
-                log_failure(-1,
-                            0,
-                            "Failed to allocate %lu bytes of memory",
-                            size);
+                print_error_msg(-1,
+                                0,
+                                "Failed to allocate %lu bytes of memory",
+                                size);
                 _exit(ENOMEM);
         }
 
@@ -91,10 +28,10 @@ void *xrealloc(void *ptr, unsigned long size)
         ret = realloc(ptr, size);
 
         if (ret == NULL) {
-                log_failure(-1,
-                            0,
-                            "Failed to re-allocate %lu bytes of memory",
-                            size);
+                print_error_msg(-1,
+                                0,
+                                "Failed to re-allocate %lu bytes of memory",
+                                size);
                 xfree(ptr);
                 _exit(ENOMEM);
         }
@@ -102,7 +39,7 @@ void *xrealloc(void *ptr, unsigned long size)
         return ret;
 }
 
-void  xfree(void *ptr)
+void xfree(void *ptr)
 {
         if (ptr)
                 free(ptr);
@@ -114,10 +51,10 @@ char *xstrdup(const char *s)
         unsigned long size;
 
         if (s == NULL) {
-                log_failure(-1,
-                            0,
-                            "Invalid usage: "
-                            "NULL passed to strdup in the argument");
+                print_error_msg(-1,
+                                0,
+                                "Invalid usage: "
+                                "NULL passed to strdup in the argument");
                 _exit(EINVAL);
         }
 
@@ -128,25 +65,168 @@ char *xstrdup(const char *s)
         return d;
 }
 
+/********************************
+ * File system helper functions *
+ ********************************/
+
+long safe_read(int fd, char *buf, unsigned long size)
+{
+        long rv = 0L, total = 0L;
+        /*
+          Certain read semantics are assumed:
+          + Positive value which is returned by read()
+          designates amount of valid bytes in the given buffer.
+          + Beyond that, buffer may contain junk.
+          Calling application must be ready for this.
+          + -1 as retvalue doesn't lift the validity of previous data.
+          It simply designates an error. It can be a temporar error
+          which won't repeat on next read:
+          for instance, EAGAIN for NONBLOCK files
+          or permanent which is repeatable:
+          for instance, EPERM for lack of permissions.
+          So this point allows us to ignore possible final error
+          after sequence of successful reads: either the error
+          goes away or it will be picked on next read.
+          + -1 doesn't alters file position.
+          This is true for the Linux implementation.
+        */
+
+        if (fd < 0 ||
+            buf == NULL ||
+            size == 0UL) {
+                errno = EINVAL;
+                return -1L;
+        }
+
+        while (size > 0UL) {
+                rv = read(fd, buf, size);
+
+                if (rv <= 0L || (unsigned long) rv > size ||
+                    total > LONG_MAX - rv)
+                        break;
+
+                buf += rv;
+                size -= (unsigned long) rv;
+                total += rv;
+        }
+
+        if (total > 0L || rv == 0L) {
+                errno = 0;
+                return total;
+        } else if (rv > 0L) {
+                errno = ERANGE;
+        }
+
+        return -1L;
+}
+
+long safe_write(int fd, const char *buf, unsigned long size)
+{
+        long rv = 0L, total = 0L;
+
+        /*
+          We generally follow the same strategy as for safe_read
+          except one point:
+          + If the very first write() attempt results in 0L returned,
+          treat it as failure.
+        */
+
+        if (fd < 0 ||
+            buf == NULL ||
+            size == 0UL) {
+                errno = EINVAL;
+                return -1L;
+        }
+
+        while (size > 0UL) {
+                rv = write(fd, buf, size);
+
+                if (rv <= 0L || (unsigned long) rv > size ||
+                    total > LONG_MAX - rv)
+                        break;
+
+                buf += rv;
+                size -= (unsigned long) rv;
+                total += rv;
+        }
+
+        if (total > 0L) {
+                errno = 0;
+                return total;
+        } else if (rv == 0L) {
+                errno = ENOSPC;
+        } else if (rv > 0L) {
+                errno = ERANGE;
+        }
+
+        return -1L;
+}
+
+/* Creates private RW mapping of the file specified with @path.
+   Return -1 on failure (for any reason), 0 - on success.
+   Provides mapping data (base address + size) via pointers @basep, @sizep. */
+int create_file_mapping(const char *path,
+                        void **basep,
+                        unsigned long *sizep)
+{
+        int fd, rc = -1;
+        void *base;
+        unsigned long size;
+        struct stat st_mem;
+
+        if (path == NULL || *path == '\0' ||
+            basep == NULL ||
+            sizep == NULL)
+                goto out;
+
+        if ((fd = open(path, O_RDONLY)) < 0)
+                goto out;
+
+        memset(&st_mem, 0, sizeof(st_mem));
+        if (fstat(fd, &st_mem) < 0 ||
+            st_mem.st_size <= 0L)
+                goto out_close;
+
+        size = (unsigned long) st_mem.st_size;
+        base = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0L);
+        if (base == MAP_FAILED)
+                goto out_close;
+
+        *basep = base;
+        *sizep = size;
+        rc = 0;
+
+out_close:
+        close(fd);
+out:
+        return rc;
+}
+
+void delete_file_mapping(void *base,
+                         unsigned long size)
+{
+        if (base != NULL && size > 0UL)
+                munmap(base, size);
+}
+
 /* Using $PATH environment variable locates real path of target binary */
 char *locate_file(const char *name)
 {
         unsigned long name_len;
         char *resolved_name = NULL;
         const char *path_env, *s, *e;
-        int is_resolved, seen_zero_seg = 0;
+        int seen_zero_seg = 0;
 
         if (name == NULL || *name == '\0')
                 return resolved_name;
 
         /* Names starting with "/", "./", "../" or being one of
            ".", ".." should be handled separately */
-        is_resolved = (name[0] == '/' ||
-                       (name[0] == '.' && (name[1] == '\0' ||
-                                           name[1] == '/'  ||
-                                           (name[1] == '.'  && (name[2] == '\0' ||
-                                                                name[2] == '/')))));
-        if (is_resolved) {
+        if (name[0] == '/' ||
+            (name[0] == '.' && (name[1] == '\0' ||
+                                name[1] == '/'  ||
+                                (name[1] == '.'  && (name[2] == '\0' ||
+                                                     name[2] == '/'))))) {
                 if (access(name, X_OK) == 0)
                         resolved_name = xstrdup(name);
                 return resolved_name;
@@ -207,46 +287,11 @@ char *locate_file(const char *name)
         return resolved_name;
 }
 
-/* Creates private RW mapping of the file specified with @path.
-   Return -1 on failure (for any reason), 0 - on success.
-   Provides mapping data (base address + size) via pointers @basep, @sizep. */
-int load_file(const char *path, void **basep, unsigned long *sizep)
-{
-        int fd, rc = -1;
-        void *base;
-        unsigned long size;
-        struct stat st_mem;
+/****************************************
+ * Dynamic (self-expandable) buffer API *
+ ****************************************/
 
-        if ((fd = open(path, O_RDONLY)) < 0)
-                goto out;
-
-        memset(&st_mem, 0, sizeof(st_mem));
-        if (fstat(fd, &st_mem) < 0 ||
-            st_mem.st_size <= 0L)
-                goto out_close;
-
-        size = (unsigned long) st_mem.st_size;
-        base = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0L);
-        if (base == MAP_FAILED)
-                goto out_close;
-
-        *basep = base;
-        *sizep = size;
-        rc = 0;
-
-out_close:
-        close(fd);
-out:
-        return rc;
-}
-
-/* Removes file mapping */
-void unload_file(void *base, unsigned long size)
-{
-        munmap(base, size);
-}
-
-void  dbuf_init(dbuf_t *dbuf)
+void dbuf_init(dbuf_t *dbuf)
 {
         if (dbuf == NULL)
                 return;
@@ -288,7 +333,7 @@ char *dbuf_alloc(dbuf_t *dbuf, unsigned long size)
         return dbuf->pos;
 }
 
-int   dbuf_printf(dbuf_t *dbuf, const char *fmt, ...)
+int dbuf_printf(dbuf_t *dbuf, const char *fmt, ...)
 {
         va_list ap;
         char _mem[1024], *ptr;
@@ -329,7 +374,7 @@ int   dbuf_printf(dbuf_t *dbuf, const char *fmt, ...)
         return ret_val;
 }
 
-void  dbuf_free(dbuf_t *dbuf)
+void dbuf_free(dbuf_t *dbuf)
 {
         if (dbuf == NULL)
                 return;
@@ -343,266 +388,581 @@ void  dbuf_free(dbuf_t *dbuf)
         dbuf->pos = dbuf->base;
 }
 
-static void run_child(char *argv[],
-                      int dat_fd,
-                      int log_fd)
+/**************************
+ * General purpose logger *
+ **************************/
+
+void print_error_msg(int fd,
+                     int error_kind,
+                     const char *fmt,
+                     ...)
+{
+        va_list ap;
+        char _mem[4096], *tail = _mem;
+        unsigned long tail_room = sizeof(_mem);
+        int rv, old_err_num = errno;
+
+        if (fd < 0)
+                fd = STDERR_FILENO;
+        if (error_kind < 0)
+                error_kind = old_err_num;
+
+        if (error_kind != 0) {
+                const char *error_dsc;
+
+                errno = 0;
+                error_dsc = strerror(error_kind);
+                if (error_dsc == NULL || errno != 0)
+                        error_dsc = "Unknown error";
+
+                rv = snprintf(tail,
+                              tail_room,
+                              "Failed with \"%s\"\n",
+                              error_dsc);
+                if (rv <= 0 || (unsigned long) rv >= tail_room)
+                        goto out;
+                tail += rv, tail_room -= (unsigned long) rv;
+        }
+
+        va_start(ap, fmt);
+        rv = vsnprintf(tail, tail_room, fmt, ap);
+        va_end(ap);
+        if (rv <= 0 || (unsigned long) rv >= tail_room)
+                goto out;
+        tail += rv, tail_room -= (unsigned long) rv;
+
+        if (tail[-1] != '\n')
+                *tail++ = '\n', tail_room--;
+
+        safe_write(fd, _mem, sizeof(_mem) - tail_room);
+
+out:
+        errno = old_err_num;
+}
+
+/*******************************************
+ * Enhanced (and convenient) child spawner *
+ *******************************************/
+
+static void run_child(char **argv,
+                      int log_fd,
+                      int in_fd,
+                      int out_fd)
 {
         extern char **environ;
 
-        /* dup2 duplicates file descriptor
-           with CLOEXEC bit cleared for the copy. */
-        if (dup2(dat_fd, STDOUT_FILENO) < 0) {
-                log_failure(log_fd,
-                            -1,
-                            "In %s\nAt call \"dup2\"",
-                            __func__);
-                goto fail;
-        }
-
         /* CLOEXEC bit ensures our parent will see
            the EOF in log pipe. */
-        fcntl(dat_fd, F_SETFD, FD_CLOEXEC);
         fcntl(log_fd, F_SETFD, FD_CLOEXEC);
+
+        if (in_fd >= 0) {
+                /* dup2 duplicates file descriptor
+                   with CLOEXEC bit cleared for the copy. */
+                if (dup2(in_fd, STDIN_FILENO) < 0) {
+                        print_error_msg(log_fd,
+                                        -1,
+                                        "In %s\n"
+                                        "At \"dup2(in_fd, STDIN_FILENO)\"",
+                                        __func__);
+                        goto fail;
+                }
+
+                
+                fcntl(in_fd, F_SETFD, FD_CLOEXEC);
+        }
+
+        if (out_fd >= 0) {
+                if (dup2(out_fd, STDOUT_FILENO) < 0) {
+                        print_error_msg(log_fd,
+                                        -1,
+                                        "In %s\n"
+                                        "At \"dup2(out_fd, STDOUT_FILENO)\"",
+                                        __func__);
+                        goto fail;
+                }
+
+                fcntl(out_fd, F_SETFD, FD_CLOEXEC);
+        }
 
         execve(argv[0], argv, environ);
 
-        log_failure(log_fd,
-                    -1,
-                    "In %s\nAt call \"execve\"",
-                    __func__);
+        print_error_msg(log_fd,
+                        -1,
+                        "In %s\n"
+                        "At \"execve\"",
+                        __func__);
 
 fail:
         _exit(-1);
 }
 
-int run_cmd(char *argv[],
-            char **bufp,
-            unsigned long *sizep)
+static int communicate_child(int *wfd,
+                             int *rfd,
+                             char **wbuf,
+                             char **rbuf,
+                             unsigned long *wsize,
+                             unsigned long *rsize)
 {
-        int log_fd[2] = { -1, -1 };
-        int dat_fd[2] = { -1, -1 };
-        int status = 0, exit_code;
-        long pid;
-        char _mem[4096], *p;
-        unsigned long nr_avail;
-        long rv;
-        char *buf = NULL, *tmp;
-        unsigned long size = 0UL;
+        struct pollfd pbuf[2U];
+        unsigned int pcount = 0U;
+        int need_close, revents;
+        long n;
+
+        memset(pbuf, 0, sizeof(pbuf));
+
+        if (*wfd >= 0) {
+                pbuf[0U].fd = *wfd;
+                pbuf[0U].events = POLLOUT;
+                pcount++;
+        }
+
+        if (*rfd >= 0) {
+                pbuf[pcount].fd = *rfd;
+                pbuf[pcount].events = POLLIN;
+                pcount++;
+        }
+
+        if (poll(pbuf, pcount, -1) < 0) {
+                print_error_msg(-1,
+                                -1,
+                                "In %s\n"
+                                "At \"poll\"",
+                                __func__);
+                return -1;
+        }
+
+        if (*wfd >= 0 && (revents = pbuf[0U].revents) != 0) {
+                need_close = 0;
+
+                if ((revents & POLLERR) != 0) {
+                        need_close = 1;
+                } else if ((revents & POLLOUT) != 0) {
+                        while (*wsize > 0UL && (n = safe_write(*wfd,
+                                                               *wbuf,
+                                                               *wsize)) > 0L) {
+                                *wbuf += n;
+                                *wsize -= (unsigned long) n;
+                        }
+
+                        if (*wsize == 0UL || errno == EPIPE) {
+                                need_close = 1;
+                        } else if (errno != EAGAIN) {
+                                print_error_msg(-1,
+                                                -1,
+                                                "In %s\n"
+                                                "At \"write(*wfd)\"",
+                                                __func__);
+                                return -1;
+                        }
+                } else {
+                        print_error_msg(-1,
+                                        -1,
+                                        "In %s\n"
+                                        "Spurious value from \"poll\": %d",
+                                        __func__,
+                                        revents);
+                        return -1;
+                }
+
+                if (need_close) {
+                        close(*wfd); *wfd = -1;
+                }
+        }
+
+        if (*rfd >= 0 && (revents = pbuf[pcount - 1U].revents) != 0) {
+                need_close = 0;
+
+                if ((revents & POLLIN) != 0) {
+                        char scratch_mem[4096], *tmp;
+                        unsigned long old_rsize;
+
+                        do {
+                                n = safe_read(*rfd,
+                                              scratch_mem,
+                                              sizeof(scratch_mem));
+
+                                if (n < 0L && errno == EAGAIN)
+                                        break;
+
+                                if (n == 0L) {
+                                        need_close = 1; break;
+                                }
+
+                                if (n < 0L) {
+                                        print_error_msg(-1,
+                                                        -1,
+                                                        "In %s\n"
+                                                        "At \"read(*rfd)\"",
+                                                        __func__);
+                                        return -1;
+                                }
+
+                                old_rsize = *rsize;
+                                *rsize += (unsigned long) n;
+                                if (*rsize <= old_rsize) {
+                                        print_error_msg(-1,
+                                                        ERANGE,
+                                                        "In %s\n"
+                                                        "At \"read(*rfd)\"",
+                                                        __func__);
+                                        return -1;
+                                }
+
+                                if ((tmp = realloc(*rbuf, *rsize)) == NULL) {
+                                        print_error_msg(-1,
+                                                        -1,
+                                                        "In %s\n"
+                                                        "At \"realloc\"",
+                                                        __func__);
+                                        return -1;
+                                }
+                                *rbuf = tmp;
+                                memcpy(*rbuf + old_rsize, scratch_mem,
+                                       (unsigned long) n);
+
+                                /* If n == sizeof(scratch_mem) then
+                                   there may be more data.
+                                   Anyway, at least one read is required
+                                   to find it out. */
+                        } while ((unsigned long) n == sizeof(scratch_mem));
+                } else {
+                        /* Probably, POLLHUP without any data */
+                        need_close = 1;
+                }
+
+                if (need_close) {
+                        close(*rfd); *rfd = -1;
+                }
+        }
+
+        return 0;
+}
+
+int run_cmd(const child_ctx_t *ctx)
+{
+        int all_fds[6] = { -1, -1, -1, -1, -1, -1 };
+        int *const log_fds = all_fds;
+        int *const in_fds  = all_fds + 2;
+        int *const out_fds = all_fds + 4;
+        pid_t child_id = -1, waitee_id;
+        int ret_code, status;
+
+        char *obuf = NULL; /* Data received from the child. */
+        unsigned long osize = 0UL; /* The amount of data produced by our child. */
+        char *ibuf = ctx->ibuf;
+        unsigned long isize = ctx->isize;
+        char scratch_mem[4096];
+        long n;
+
+        static int initialized = 0;
+
+        if ((ctx->flags & ~IO_BOTH) != 0) {
+                print_error_msg(-1,
+                                0,
+                                "In %s\n"
+                                "Invalid flags %d",
+                                __func__,
+                                ctx->flags);
+                goto fail;
+        }
+
+        if ((ctx->flags & IO_TO) != 0 &&
+            (ctx->ibuf == NULL) != (ctx->isize == 0UL)) {
+                print_error_msg(-1,
+                                0,
+                                "In %s\n"
+                                "Parameters (IO_TO) contradict each other",
+                                __func__);
+                goto fail;
+        }
+
+        if ((ctx->flags & IO_FROM) != 0 &&
+            (ctx->obuf_p == NULL || ctx->osize_p == NULL)) {
+                print_error_msg(-1,
+                                0,
+                                "In %s\n"
+                                "Parameters (IO_FROM) are invalid",
+                                __func__);
+                goto fail;
+        }
+
+        if (!initialized) {
+                struct sigaction sa_mem, *const sa = &sa_mem;
+
+                memset(sa, 0, sizeof(*sa));
+                sigemptyset(&sa->sa_mask);
+                sa->sa_handler = SIG_IGN;
+                sa->sa_flags = 0;
+
+                if (sigaction(SIGPIPE, sa, NULL) < 0) {
+                        print_error_msg(-1,
+                                        -1,
+                                        "In %s\n"
+                                        "At \"sigaction(SIGPIPE, SIG_IGN)\"",
+                                        __func__);
+                        goto fail;
+                }
+
+                initialized = 1;
+        }
 
         /*
-          We create two pipes here:
+          We create up to three pipes here:
           + One pipe replaces stdout of the child process;
-          + Other pipe signals whether system error has occured.
-            during process creation.
+          + Other pipe is used in place of stdin of the child process;
+          + Log pipe signals whether system error has occured
+          during process creation.
+          It is used for synchronization since we cannot rely on
+          exit codes: in general case, external program is capable of
+          exiting with arbitrary codes.
+          So it would be impossible to distinguish if something went wrong
+          because of our miscalculations.
           Log pipe is going away upon successful call to execve()
           which is ensured with CLOEXEC file descriptor bit.
          */
-        if (pipe(dat_fd) < 0) {
-                log_failure(-1,
-                            -1,
-                            "In %s\nAt call \"pipe(dat_fd)\"",
-                            __func__);
-                return -1;
+
+        if (pipe(log_fds) < 0) {
+                print_error_msg(-1,
+                                -1,
+                                "In %s\n"
+                                "At \"pipe(log_fds)\"",
+                                __func__);
+                goto fail;
         }
 
-        if (pipe(log_fd) < 0) {
-                log_failure(-1,
-                            -1,
-                            "In %s\nAt call \"pipe(log_fd)\"",
-                            __func__);
-                close(dat_fd[0]);
-                close(dat_fd[1]);
-                return -1;
+        if (log_fds[0] < 0 ||
+            log_fds[1] < 0) {
+                print_error_msg(-1,
+                                EBADF,
+                                "In %s\n"
+                                "At \"pipe(log_fds)\"",
+                                __func__);
+                goto fail;
         }
 
-        if ((pid = fork()) < 0L) {
-                log_failure(-1,
-                            -1,
-                            "In %s\nAt call \"fork\"",
-                            __func__);
-                close(dat_fd[0]);
-                close(dat_fd[1]);
-                close(log_fd[0]);
-                close(log_fd[1]);
-                return -1;
+        if ((ctx->flags & IO_TO) != 0) {
+                if (pipe(in_fds) < 0) {
+                        print_error_msg(-1,
+                                        -1,
+                                        "In %s\n"
+                                        "At \"pipe(in_fds)\"",
+                                        __func__);
+                        goto fail;
+                }
+
+                if (in_fds[0] < 0 ||
+                    in_fds[1] < 0) {
+                        print_error_msg(-1,
+                                        EBADF,
+                                        "In %s\n"
+                                        "At \"pipe(in_fds)\"",
+                                        __func__);
+                        goto fail;
+                }
+
+                /* We have to set our ends of pipe to non-blocking mode
+                   to avoid dead-lock. */
+                if ((status = fcntl(in_fds[1], F_GETFL)) < 0) {
+                        print_error_msg(-1,
+                                        -1,
+                                        "In %s\n"
+                                        "At \"fcntl(in_fds[1], F_GETFL)\"",
+                                        __func__);
+                        goto fail;
+                }
+
+                if (fcntl(in_fds[1], F_SETFL, status | O_NONBLOCK) < 0) {
+                        print_error_msg(-1,
+                                        -1,
+                                        "In %s\n"
+                                        "At \"fcntl(in_fds[1], F_SETFL)\"",
+                                        __func__);
+                        goto fail;
+                }
         }
 
-        if (pid == 0L) {
-                close(dat_fd[0]);
-                close(log_fd[0]);
-                run_child(argv, dat_fd[1], log_fd[1]);
+        if ((ctx->flags & IO_FROM) != 0) {
+                if (pipe(out_fds) < 0) {
+                        print_error_msg(-1,
+                                        -1,
+                                        "In %s\n"
+                                        "At \"pipe(out_fds)\"",
+                                        __func__);
+                        goto fail;
+                }
+
+                if (out_fds[0] < 0 ||
+                    out_fds[1] < 0) {
+                        print_error_msg(-1,
+                                        EBADF,
+                                        "In %s\n"
+                                        "At \"pipe(out_fds)\"",
+                                        __func__);
+                        goto fail;
+                }
+
+                if ((status = fcntl(out_fds[0], F_GETFL)) < 0) {
+                        print_error_msg(-1,
+                                        -1,
+                                        "In %s\n"
+                                        "At \"fcntl(out_fds[0], F_GETFL)\"",
+                                        __func__);
+                        goto fail;
+                }
+
+                if (fcntl(out_fds[0], F_SETFL, status | O_NONBLOCK) < 0) {
+                        print_error_msg(-1,
+                                        -1,
+                                        "In %s\n"
+                                        "At \"fcntl(out_fds[0], F_SETFL)\"",
+                                        __func__);
+                        goto fail;
+                }
+        }
+
+        if ((child_id = fork()) < 0) {
+                print_error_msg(-1,
+                                -1,
+                                "In %s\nAt \"fork\"",
+                                __func__);
+                goto fail;
+        }
+
+        if (child_id == 0) {
+                close(log_fds[0]);
+                log_fds[0] = -1;
+
+                if (in_fds[1] >= 0) {
+                        close(in_fds[1]);
+                        in_fds[1] = -1;
+                }
+
+                if (out_fds[0] >= 0) {
+                        close(out_fds[0]);
+                        out_fds[0] = -1;
+                }
+
+                run_child(ctx->argv,
+                          log_fds[1],
+                          in_fds[0],
+                          out_fds[1]);
+
                 /* Unreachable */
                 for (;;) ;
         }
 
-        close(dat_fd[1]);
-        close(log_fd[1]);
+        close(log_fds[1]);
+        log_fds[1] = -1;
+
+        if (in_fds[0] >= 0) {
+                close(in_fds[0]);
+                in_fds[0] = -1;
+        }
+
+        if (out_fds[1] >= 0) {
+                close(out_fds[1]);
+                out_fds[1] = -1;
+        }
 
         /* We avoid printing error messages to console in the child process
            so no message interleaving takes place. */
-        p = _mem;
-        nr_avail = sizeof(_mem);
-        do {
-                rv = read(log_fd[0], p, nr_avail);
-
-                if (rv < 0L || (unsigned long) rv > nr_avail) {
-                        int ignored;
-
-                        log_failure(-1,
-                                    -1,
-                                    "In %s\nAt call \"read(log_fd)\"",
-                                    __func__);
-
-                        kill(pid, SIGKILL);
-                        waitpid(pid, &ignored, 0);
-
-                        close(dat_fd[0]);
-                        close(log_fd[0]);
-                        return -1;
+        if ((n = safe_read(log_fds[0],
+                           scratch_mem,
+                           sizeof(scratch_mem))) != 0L) {
+                if (n < 0L) {
+                        print_error_msg(-1,
+                                        -1,
+                                        "In %s\n"
+                                        "At \"safe_read(log_fds[0])\"",
+                                        __func__);
+                } else {
+                        /* Print error message produced by our child */
+                        print_error_msg(-1,
+                                        0,
+                                        "%.*s",
+                                        (int) n,
+                                        scratch_mem);
                 }
 
-                if (rv == 0L)
-                        break;
-
-                p += rv;
-                nr_avail -= (unsigned long) rv;
-        } while (nr_avail > 0UL);
-
-        close(log_fd[0]);
-
-        if (p != _mem) {
-                int ignored;
-
-                kill(pid, SIGKILL);
-                waitpid(pid, &ignored, 0);
-
-                close(dat_fd[0]);
-
-                /* Print error message produced by our child */
-                log_failure(-1,
-                            0,
-                            "%.*s",
-                            (int) (p - _mem),
-                            _mem);
-                return -1;
+                goto fail;
         }
 
-        do {
-                unsigned long this_size;
+        close(log_fds[0]);
+        log_fds[0] = -1;
 
-                p = _mem;
-                nr_avail = sizeof(_mem);
-                do {
-                        rv = read(dat_fd[0], p, nr_avail);
-
-                        if (rv < 0L || (unsigned long) rv > nr_avail) {
-                                int ignored;
-
-                                log_failure(-1,
-                                            -1,
-                                            "In %s\nAt call \"read(dat_fd)\"",
-                                            __func__);
-
-                                kill(pid, SIGKILL);
-                                waitpid(pid, &ignored, 0);
-
-                                close(dat_fd[0]);
-
-                                if (buf)
-                                        free(buf);
-                                return -1;
-                        }
-
-                        if (rv == 0L)
-                                break;
-
-                        p += rv;
-                        nr_avail -= (unsigned long) rv;
-                } while (nr_avail > 0UL);
-
-                if ((this_size = sizeof(_mem) - nr_avail) == 0UL)
-                        break;
-
-                tmp = realloc(buf, size + this_size);
-                if (tmp == NULL) {
-                        int ignored;
-
-                        log_failure(-1,
-                                    -1,
-                                    "In %s\nAt call \"realloc\"",
-                                    __func__);
-
-                        kill(pid, SIGKILL);
-                        waitpid(pid, &ignored, 0);
-
-                        close(dat_fd[0]);
-
-                        if (buf)
-                                free(buf);
-                        return -1;
-                }
-                buf = tmp;
-
-                memcpy(buf + size, _mem, this_size);
-                size += this_size;
-                /* If nr_avail == 0 then
-                   there may be more data.
-                   Anyway, at least one read is required
-                   to find it out. */
-        } while (nr_avail == 0UL);
-
-        close(dat_fd[0]);
-
-        if ((rv = waitpid(pid, &status, 0)) < 0L) {
-                log_failure(-1,
-                            -1,
-                            "In %s\nAt call \"waitpid\"",
-                            __func__);
-
-                kill(pid, SIGKILL);
-
-                if (buf)
-                        free(buf);
-                return -1;
+        while (in_fds[1] >= 0 || out_fds[0] >= 0) {
+                if (communicate_child(&in_fds[1], &out_fds[0],
+                                      &ibuf, &obuf,
+                                      &isize, &osize) < 0)
+                        goto fail;
         }
 
-        if (rv != pid || !(WIFEXITED(status) || WIFSIGNALED(status))) {
-                log_failure(-1,
-                            EFAULT,
-                            "In %s\nAt call \"waitpid\"",
-                            __func__);
-
-                kill(pid, SIGKILL);
-
-                if (buf)
-                        free(buf);
-                return -1;
+        if ((waitee_id = waitpid(child_id, &status, 0)) < 0) {
+                print_error_msg(-1,
+                                -1,
+                                "In %s\n"
+                                "At \"waitpid\"",
+                                __func__);
+                goto fail;
         }
+
+        if (waitee_id != child_id || !(WIFEXITED(status) || WIFSIGNALED(status))) {
+                print_error_msg(-1,
+                                EFAULT,
+                                "In %s\n"
+                                "At \"waitpid\"",
+                                __func__);
+                goto fail;
+        }
+
+        child_id = -1;
 
         if (WIFSIGNALED(status)) {
-                log_failure(-1,
-                            0,
-                            "Child %ld is killed by a signal\n",
-                            pid);
-
-                if (buf)
-                        free(buf);
-                return -1;
+                print_error_msg(-1,
+                                0,
+                                "Child %d is killed by a signal",
+                                waitee_id);
+                goto fail;
         }
 
-        if ((exit_code = WEXITSTATUS(status)) != 0) {
-                log_failure(-1,
-                            0,
-                            "Child %ld has returned %d\n",
-                            pid,
-                            exit_code);
-
-                if (buf)
-                        free(buf);
-                return -1;
+        if ((ret_code = WEXITSTATUS(status)) != 0) {
+                print_error_msg(-1,
+                                0,
+                                "Child %d has returned %d\n",
+                                waitee_id,
+                                ret_code);
+                goto fail;
         }
 
-        *bufp = buf;
-        *sizep = size;
+        if ((ctx->flags & IO_FROM) != 0) {
+                *ctx->obuf_p = obuf;
+                *ctx->osize_p = osize;
+        }
+
         return 0;
+
+fail:
+        if (child_id > 0) {
+                int ignored;
+
+                kill(child_id, SIGKILL);
+                waitpid(child_id, &ignored, 0);
+                child_id = -1;
+        }
+
+        for (n = 0L;
+             n < (long) (sizeof(all_fds) / sizeof(all_fds[0]));
+             n++) {
+                if (all_fds[n] >= 0) {
+                        close(all_fds[n]);
+                        all_fds[n] = -1;
+                }
+        }
+
+        if (obuf != NULL) {
+                free(obuf);
+                obuf = NULL; osize = 0UL;
+        }
+
+        return -1;
 }
