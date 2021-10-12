@@ -47,24 +47,30 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* util.c */
 
-void log_failure(int fd, int err_num, const char *fmt, ...);
+/* util.c */
 
 void *xmalloc(unsigned long size);
 void *xrealloc(void *ptr, unsigned long size);
-void  xfree(void *ptr);
+void xfree(void *ptr);
 char *xstrdup(const char *s);
 
+
+long safe_read(int fd, char *buf, unsigned long size);
+long safe_write(int fd, const char *buf, unsigned long size);
+int create_file_mapping(const char *path,
+                        void **basep,
+                        unsigned long *sizep);
+void delete_file_mapping(void *base,
+                         unsigned long size);
 char *locate_file(const char *name);
 
-int load_file(const char *path, void **basep, unsigned long *sizep);
-void unload_file(void *base, unsigned long size);
 
 typedef struct {
         char *base, *pos;
@@ -72,14 +78,39 @@ typedef struct {
         char _mem[sizeof(void *) << 4UL];
 } dbuf_t;
 
-void  dbuf_init(dbuf_t *dbuf);
+void dbuf_init(dbuf_t *dbuf);
 char *dbuf_alloc(dbuf_t *dbuf, unsigned long size);
-int   dbuf_printf(dbuf_t *dbuf, const char *fmt, ...);
-void  dbuf_free(dbuf_t *dbuf);
+int dbuf_printf(dbuf_t *dbuf, const char *fmt, ...);
+void dbuf_free(dbuf_t *dbuf);
 
-int run_cmd(char *argv[],
-            char **bufp,
-            unsigned long *sizep);
+
+void print_error_msg(int fd,
+                     int error_kind,
+                     const char *fmt,
+                     ...);
+
+
+typedef struct {
+        char **argv; /* The vector of standard arguments to child process.
+                        argv[0] should be real path to binary (see locate_file).
+                        Must end with NULL element as
+                        required by execve OS handler. */
+        enum {
+                IO_NONE = 0, /* Do not alter child's stdin & stdout */
+                IO_TO   = 1, /* Feed child with @ibuf content */
+                IO_FROM = 2, /* Extract child's output to @obuf_p */
+                IO_BOTH = IO_FROM | IO_TO, /* Full control of the child */
+        } flags;
+        char **obuf_p; /* The pointer to allocated buffer of data
+                          written by child to stdout */
+        unsigned long *osize_p; /* It's size */
+        char *ibuf; /* Buffer of data
+                       the child process may read from its STDIN. */
+        unsigned long isize; /* It's size */
+} child_ctx_t;
+
+int run_cmd(const child_ctx_t *ctx);
+
 
 /* parse.c */
 
