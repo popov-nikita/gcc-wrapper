@@ -75,7 +75,7 @@ char *locate_file(const char *name);
 typedef struct {
         char *base, *pos;
         unsigned long capacity;
-        char _mem[sizeof(void *) << 4UL];
+        char internal_buf[sizeof(void *) << 4UL];
 } dbuf_t;
 
 void dbuf_init(dbuf_t *dbuf);

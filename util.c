@@ -295,8 +295,8 @@ void dbuf_init(dbuf_t *dbuf)
 {
         if (dbuf == NULL)
                 return;
-        dbuf->pos = dbuf->base = dbuf->_mem;
-        dbuf->capacity = sizeof(dbuf->_mem) / sizeof(dbuf->_mem[0]);
+        dbuf->pos = dbuf->base = dbuf->internal_buf;
+        dbuf->capacity = sizeof(dbuf->internal_buf) / sizeof(dbuf->internal_buf[0]);
 }
 
 char *dbuf_alloc(dbuf_t *dbuf, unsigned long size)
@@ -320,9 +320,9 @@ char *dbuf_alloc(dbuf_t *dbuf, unsigned long size)
         if (size > dbuf->capacity) {
                 while (size > (dbuf->capacity *= 2UL)) ;
 
-                if (dbuf->base == dbuf->_mem) {
+                if (dbuf->base == dbuf->internal_buf) {
                         dbuf->base = xmalloc(dbuf->capacity);
-                        memcpy(dbuf->base, dbuf->_mem, old_size);
+                        memcpy(dbuf->base, dbuf->internal_buf, old_size);
                 } else {
                         dbuf->base = xrealloc(dbuf->base, dbuf->capacity);
                 }
@@ -336,12 +336,12 @@ char *dbuf_alloc(dbuf_t *dbuf, unsigned long size)
 int dbuf_printf(dbuf_t *dbuf, const char *fmt, ...)
 {
         va_list ap;
-        char _mem[1024], *ptr;
+        char scratch_mem[1024], *ptr;
         int ret_val;
         unsigned long size;
 
         va_start(ap, fmt);
-        ret_val = vsnprintf(_mem, sizeof(_mem), fmt, ap);
+        ret_val = vsnprintf(scratch_mem, sizeof(scratch_mem), fmt, ap);
         va_end(ap);
 
         if (ret_val < 0)
@@ -354,8 +354,8 @@ int dbuf_printf(dbuf_t *dbuf, const char *fmt, ...)
         if ((ptr = dbuf_alloc(dbuf, size)) == NULL)
                 return -1;
 
-        if (size <= sizeof(_mem)) {
-                memcpy(ptr, _mem, size);
+        if (size <= sizeof(scratch_mem)) {
+                memcpy(ptr, scratch_mem, size);
         } else {
                 va_start(ap, fmt);
                 ret_val = vsnprintf(ptr, size, fmt, ap);
@@ -379,10 +379,10 @@ void dbuf_free(dbuf_t *dbuf)
         if (dbuf == NULL)
                 return;
 
-        if (dbuf->base != dbuf->_mem) {
+        if (dbuf->base != dbuf->internal_buf) {
                 xfree(dbuf->base);
-                dbuf->base = dbuf->_mem;
-                dbuf->capacity = sizeof(dbuf->_mem) / sizeof(dbuf->_mem[0]);
+                dbuf->base = dbuf->internal_buf;
+                dbuf->capacity = sizeof(dbuf->internal_buf) / sizeof(dbuf->internal_buf[0]);
         }
 
         dbuf->pos = dbuf->base;
@@ -398,8 +398,8 @@ void print_error_msg(int fd,
                      ...)
 {
         va_list ap;
-        char _mem[4096], *tail = _mem;
-        unsigned long tail_room = sizeof(_mem);
+        char scratch_mem[4096], *tail = scratch_mem;
+        unsigned long tail_room = sizeof(scratch_mem);
         int rv, old_err_num = errno;
 
         if (fd < 0)
@@ -434,7 +434,7 @@ void print_error_msg(int fd,
         if (tail[-1] != '\n')
                 *tail++ = '\n', tail_room--;
 
-        safe_write(fd, _mem, sizeof(_mem) - tail_room);
+        safe_write(fd, scratch_mem, sizeof(scratch_mem) - tail_room);
 
 out:
         errno = old_err_num;
