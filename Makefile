@@ -1,12 +1,12 @@
 export LC_ALL := C
 
-SOURCES := gcc-wrapper.c util.c
+SOURCES := gcc-wrapper.c util.c parse.c
 OBJECTS := $(patsubst %.c,%.o,$(SOURCES))
 HEADERS := common.h
 PROGRAM := gcc-wrapper
 
 CC := gcc
-CFLAGS := -O2 -Wall -Wextra
+CFLAGS := -O0 -Wall -Wextra -g -fsanitize=undefined
 RM := rm
 
 .PHONY: all clean test
@@ -14,7 +14,7 @@ RM := rm
 all: $(PROGRAM)
 
 clean:
-	$(RM) -v -f $(PROGRAM) $(OBJECTS)
+	$(RM) -f -v $(PROGRAM) $(OBJECTS)
 
 test:
 	$(MAKE) -C tests/ test
