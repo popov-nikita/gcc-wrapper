@@ -333,6 +333,23 @@ char *dbuf_alloc(dbuf_t *dbuf, unsigned long size)
         return dbuf->pos;
 }
 
+int dbuf_putc(dbuf_t *dbuf, int c)
+{
+        char *ptr;
+
+        if (c < 0 || c >= 256)
+                return -1;
+
+        if ((ptr = dbuf_alloc(dbuf, 1UL)) == NULL)
+                return -1;
+
+        *((unsigned char *) ptr) = (unsigned char) c;
+
+        dbuf->pos += 1;
+
+        return 0;
+}
+
 int dbuf_printf(dbuf_t *dbuf, const char *fmt, ...)
 {
         va_list ap;
