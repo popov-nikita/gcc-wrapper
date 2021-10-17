@@ -75,11 +75,16 @@ char *locate_file(const char *name);
 typedef struct {
         char *base, *pos;
         unsigned long capacity;
-        char internal_buf[sizeof(void *) << 4UL];
+        union {
+                char internal_buf[sizeof(void *) << 4UL];
+                unsigned long align_ul;
+                void *align_ptr;
+        };
 } dbuf_t;
 
 void dbuf_init(dbuf_t *dbuf);
 char *dbuf_alloc(dbuf_t *dbuf, unsigned long size);
+int dbuf_putc(dbuf_t *dbuf, int c);
 int dbuf_printf(dbuf_t *dbuf, const char *fmt, ...);
 void dbuf_free(dbuf_t *dbuf);
 
@@ -126,5 +131,7 @@ int read_linemarker(const char *chp,
                     const char *const limit,
                     linemarker_t *lm,
                     const char **nxtp);
+dbuf_t *process_linemarkers(const char *const data,
+                            unsigned long size);
 
 #endif
