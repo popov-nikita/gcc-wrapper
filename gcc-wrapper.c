@@ -143,16 +143,16 @@ static void extend_argv(comm_info_t *ci,
         va_end(ap);
 }
 
-static void doit_i(const comm_info_t *ci,
-                   const char *buf,
+static void doit_i(const char *i_file,
+                   const char *o_file,
+                   const char *const data,
                    unsigned long size)
 {
         print_error_msg(-1,
                         0,
-                        "Mode: %c; Input file: %s; Outpuf file: %s; Buf size = %lu",
-                        ci->mode,
-                        ci->i_file,
-                        ci->o_file,
+                        "Input file: %s; Outpuf file: %s; Buf size = %lu",
+                        i_file,
+                        o_file,
                         size);
 }
 
@@ -161,8 +161,7 @@ static int doit(comm_info_t *ci)
         char *obuf = NULL;
         unsigned long osize = 0UL;
         child_ctx_t ctx_mem;
-        struct stat st_mem;
-        int ret_code;
+        int is_success;
         char mode_buf[3] = { '-', '\0', '\0' };
 
         extend_argv(ci, "-E", "-o-", NULL);
@@ -176,13 +175,14 @@ static int doit(comm_info_t *ci)
         ctx_mem.obuf_p = &obuf;
         ctx_mem.osize_p = &osize;
 
-        ret_code = run_cmd(&ctx_mem) < 0 || obuf == NULL;
+        is_success = run_cmd(&ctx_mem) == 0 && obuf != NULL;
 
         xfree(ci->argv[--ci->argc]);
         xfree(ci->argv[--ci->argc]);
         ci->argv = xrealloc(ci->argv,
                             sizeof(char *) * ci->argc);
-        if (ret_code)
+
+        if (!is_success)
                 return -1;
 
         if (fini_arg_data(ci,
@@ -192,14 +192,6 @@ static int doit(comm_info_t *ci)
                 xfree(obuf);
                 return -1;
         }
-
-        memset(&st_mem, 0, sizeof(st_mem));
-        if (stat(ci->i_file, &st_mem) == 0 &&
-            S_ISREG(st_mem.st_mode)) {
-                doit_i(ci, obuf, osize);
-        }
-
-        xfree(ci->i_file); ci->i_file = NULL;
 
         mode_buf[1] = ci->mode;
         extend_argv(ci,
@@ -219,13 +211,33 @@ static int doit(comm_info_t *ci)
         ctx_mem.ibuf = obuf;
         ctx_mem.isize = osize;
 
-        ret_code = run_cmd(&ctx_mem) < 0;
+        is_success = run_cmd(&ctx_mem) == 0;
 
         ci->argv = xrealloc(ci->argv,
                             sizeof(char *) * ci->argc);
+
+        if (is_success) {
+                struct stat ist_mem, ost_mem;
+
+                /* Proceed only if both input and output
+                   paths designate real file */
+                memset(&ist_mem, 0, sizeof(ist_mem));
+                memset(&ost_mem, 0, sizeof(ost_mem));
+                if (stat(ci->i_file, &ist_mem) == 0 &&
+                    S_ISREG(ist_mem.st_mode) &&
+                    stat(ci->o_file, &ost_mem) == 0 &&
+                    S_ISREG(ost_mem.st_mode)) {
+                        doit_i(ci->i_file,
+                               ci->o_file,
+                               obuf,
+                               osize);
+                }
+        }
+
+        xfree(ci->i_file); ci->i_file = NULL;
         xfree(obuf);
 
-        return ret_code ? -1 : 0;
+        return is_success ? 0 : -1;
 }
 
 int main(int argc, char *argv[])
