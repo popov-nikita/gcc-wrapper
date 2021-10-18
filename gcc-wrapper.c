@@ -58,7 +58,7 @@ static int init_arg_data(int argc,
                 ci_mem.argv[ci_mem.argc - 1UL] = xstrdup(sval);
         }
 
-        if (ci_mem.mode == '\0' ||
+        if (ci_mem.mode == '\0' || ci_mem.mode == 'E' ||
             ci_mem.o_file == NULL)
                 goto fail;
 
