@@ -306,3 +306,192 @@ out:
 
         return buffer;
 }
+
+/*
+	Trims whitespaces leaving only one instance between adjacent tokens
+	(except initial whitespaces in a line).
+	Comment is considered one whitespace character.
+	Everything is done in-place.
+	Returns size of trimmed content.
+ */
+unsigned long trim_whitespaces(char *const data, unsigned long size)
+{
+	char *src, *dst, *saved_dst, *const limit = data + size, quote = '\0';
+	int seen_token = 0, init_ws = 1;
+	enum {
+		S_WS,
+		S_TOKEN,
+		S_IN_QUOTES,
+		S_IN_ML_COMMENT,
+		S_IN_OL_COMMENT,
+	} state = S_WS;
+
+	for (src = saved_dst = dst = data;
+	     src < limit;
+	     src++) {
+		switch (state) {
+		case S_WS:
+			if (is_ws(*src)) {
+				if (init_ws)
+					*dst++ = *src;
+				continue;
+			}
+
+			init_ws = 0;
+
+			if (*src == '\n') {
+				if (!seen_token)
+					dst = saved_dst;
+				*dst++ = '\n';
+				saved_dst = dst;
+
+				seen_token = 0;
+				init_ws = 1;
+				continue;
+			}
+
+			if (*src == '/') {
+				char lookahead = (src + 1 < limit) ? *(src + 1) : '\0';
+
+				if (lookahead == '*') {
+					src++;
+					state = S_IN_ML_COMMENT;
+					continue;
+				} else if (lookahead == '/') {
+					src++;
+					state = S_IN_OL_COMMENT;
+					continue;
+				}
+			}
+
+			if (seen_token)
+				*dst++ = ' ';
+
+			seen_token = 1;
+			if (*src == '"' || *src == '\'') {
+				quote = *src;
+				state = S_IN_QUOTES;
+			} else {
+				state = S_TOKEN;
+			}
+			*dst++ = *src;
+			continue;
+
+		case S_TOKEN:
+			if (is_ws(*src)) {
+				state = S_WS;
+				continue;
+			}
+
+			if (*src == '\n') {
+				*dst++ = '\n';
+				saved_dst = dst;
+
+				seen_token = 0;
+				init_ws = 1;
+				state = S_WS;
+				continue;
+			}
+
+			if (*src == '/') {
+				char lookahead = (src + 1 < limit) ? *(src + 1) : '\0';
+
+				if (lookahead == '*') {
+					src++;
+					state = S_IN_ML_COMMENT;
+					continue;
+				} else if (lookahead == '/') {
+					src++;
+					state = S_IN_OL_COMMENT;
+					continue;
+				}
+			}
+
+			if (*src == '"' || *src == '\'') {
+				quote = *src;
+				state = S_IN_QUOTES;
+			} else {
+				;
+			}
+			*dst++ = *src;
+			continue;
+
+		case S_IN_QUOTES:
+			/* Handle escaping */
+			if (*src == '\\') {
+				if (src + 1 < limit)
+					*dst++ = *src++;
+			} else if (*src == quote) {
+				quote = '\0';
+				state = S_TOKEN;
+			}
+
+			*dst++ = *src;
+			continue;
+
+		case S_IN_ML_COMMENT:
+			if (*src == '\n') {
+				if (!seen_token)
+					dst = saved_dst;
+				*dst++ = '\n';
+				saved_dst = dst;
+
+				seen_token = 0;
+				init_ws = 1;
+			} else if (*src == '*') {
+				char lookahead = (src + 1 < limit) ? *(src + 1) : '\0';
+
+				if (lookahead == '/') {
+					src++;
+					state = S_WS;
+				}
+			}
+
+			continue;
+
+		case S_IN_OL_COMMENT:
+			if (*src == '\n') {
+				if (!seen_token)
+					dst = saved_dst;
+				*dst++ = '\n';
+				saved_dst = dst;
+
+				seen_token = 0;
+				init_ws = 1;
+				state = S_WS;
+			}
+
+			continue;
+		}
+	}
+
+	if (!seen_token)
+		dst = saved_dst;
+
+	return (unsigned long) (dst - data);
+}
+
+/* Removes extra empty lines leaving only one */
+unsigned long shrink_lines(char *const data, unsigned long size)
+{
+	char *src, *dst, *const limit = data + size;
+	unsigned long nl_count;
+
+	for (src = dst = data, nl_count = 0UL;
+	     src < limit;
+	     src++) {
+		if (*src == '\n') {
+			if (nl_count < 2UL) {
+				nl_count++;
+				*dst++ = *src;
+			} else {
+				; /* No copy */
+			}
+		} else {
+			nl_count = 0UL;
+			*dst++ = *src;
+		}
+	}
+
+	return (unsigned long) (dst - data);
+}

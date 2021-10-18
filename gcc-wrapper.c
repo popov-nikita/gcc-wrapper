@@ -225,6 +225,14 @@ static void doit_i(const char *i_file,
                 return;
         }
 
+        /* Make our file somewhat pretty */
+        buffer_sz = (long) trim_whitespaces(buffer->base,
+                                            (unsigned long) buffer_sz);
+        buffer_sz = (long) shrink_lines(buffer->base,
+                                        (unsigned long) buffer_sz);
+        /* Keep buffer meta-data up-to-date */
+        buffer->pos = buffer->base + buffer_sz;
+
         mangled_nm = mangle_filename(i_file, o_file);
 
         if ((fd = open(mangled_nm,
