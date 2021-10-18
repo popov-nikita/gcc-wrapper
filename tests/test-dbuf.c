@@ -1,21 +1,21 @@
 #include "../common.h"
 
 extern dbuf_t *dbuf;
-static const unsigned long init_capacity = (sizeof(dbuf->_mem) /
-                                            sizeof(dbuf->_mem[0]));
+static const unsigned long init_capacity = (sizeof(dbuf->internal_buf) /
+                                            sizeof(dbuf->internal_buf[0]));
 
 static int check_init_state(dbuf_t *dbuf)
 {
-        return (dbuf->base == dbuf->_mem &&
-                dbuf->pos  == dbuf->_mem &&
+        return (dbuf->base == dbuf->internal_buf &&
+                dbuf->pos  == dbuf->internal_buf &&
                 dbuf->capacity == init_capacity);
 }
 
 static int check_dbuf_printf(dbuf_t *dbuf)
 {
-        char _mem[] = { '\0', '0', '0', '0', '\0' };
-        char *const str = _mem + 1;
-        const unsigned long last_idx = sizeof(_mem) - 2UL;
+        char scratch_mem[] = { '\0', '0', '0', '0', '\0' };
+        char *const str = scratch_mem + 1;
+        const unsigned long last_idx = sizeof(scratch_mem) - 2UL;
         unsigned long idx, count;
 
         for (idx = last_idx, count = 0UL;
@@ -33,12 +33,12 @@ static int check_dbuf_printf(dbuf_t *dbuf)
                         return 0;
                 }
 
-                for (; idx > 0UL && _mem[idx] == '9'; idx--) ;
+                for (; idx > 0UL && scratch_mem[idx] == '9'; idx--) ;
 
                 if (idx > 0UL) {
-                        _mem[idx]++;
+                        scratch_mem[idx]++;
                         while (idx < last_idx)
-                                _mem[++idx] = '0';
+                                scratch_mem[++idx] = '0';
                 }
         }
 
@@ -65,11 +65,11 @@ int main(void)
 
         if (!check_init_state(dbuf)) {
                 printf("ERROR: Insane init state\n"
-                       "    &dbuf->_mem      == %p\n"
-                       "     dbuf->base      == %p\n"
-                       "     dbuf->pos       == %p\n"
-                       "     dbuf->capacity  == %lu\n",
-                       dbuf->_mem, dbuf->base, dbuf->pos, dbuf->capacity);
+                       "    &dbuf->internal_buf == %p\n"
+                       "     dbuf->base         == %p\n"
+                       "     dbuf->pos          == %p\n"
+                       "     dbuf->capacity     == %lu\n",
+                       dbuf->internal_buf, dbuf->base, dbuf->pos, dbuf->capacity);
                 return 1;
         }
 
@@ -81,16 +81,16 @@ int main(void)
 
         if (dbuf->pos != ptr ||
             dbuf->pos != dbuf->base ||
-            dbuf->base == dbuf->_mem ||
+            dbuf->base == dbuf->internal_buf ||
             dbuf->capacity == init_capacity) {
                 printf("ERROR: Wrong state after allocation of %lu bytes\n"
-                       "     ptr             == %p\n"
-                       "    &dbuf->_mem      == %p\n"
-                       "     dbuf->base      == %p\n"
-                       "     dbuf->pos       == %p\n"
-                       "     dbuf->capacity  == %lu\n",
+                       "     ptr                == %p\n"
+                       "    &dbuf->internal_buf == %p\n"
+                       "     dbuf->base         == %p\n"
+                       "     dbuf->pos          == %p\n"
+                       "     dbuf->capacity     == %lu\n",
                        init_capacity + 1UL, ptr,
-                       dbuf->_mem, dbuf->base, dbuf->pos, dbuf->capacity);
+                       dbuf->internal_buf, dbuf->base, dbuf->pos, dbuf->capacity);
                 return 1;
         }
 
@@ -108,17 +108,17 @@ int main(void)
         /* Ensure no state change occured */
         if (dbuf->pos != ptr ||
             dbuf->pos != dbuf->base ||
-            dbuf->base == dbuf->_mem ||
+            dbuf->base == dbuf->internal_buf ||
             dbuf->capacity == init_capacity) {
                 printf("ERROR: Wrong state after failed allocation "
                        "of %lu bytes\n"
-                       "     ptr             == %p\n"
-                       "    &dbuf->_mem      == %p\n"
-                       "     dbuf->base      == %p\n"
-                       "     dbuf->pos       == %p\n"
-                       "     dbuf->capacity  == %lu\n",
+                       "     ptr                == %p\n"
+                       "    &dbuf->internal_buf == %p\n"
+                       "     dbuf->base         == %p\n"
+                       "     dbuf->pos          == %p\n"
+                       "     dbuf->capacity     == %lu\n",
                        ULONG_MAX, ptr,
-                       dbuf->_mem, dbuf->base, dbuf->pos, dbuf->capacity);
+                       dbuf->internal_buf, dbuf->base, dbuf->pos, dbuf->capacity);
                 return 1;
         }
 
@@ -129,11 +129,11 @@ int main(void)
 
         if (!check_init_state(dbuf)) {
                 printf("ERROR: Insane init state for freed buffer\n"
-                       "    &dbuf->_mem      == %p\n"
-                       "     dbuf->base      == %p\n"
-                       "     dbuf->pos       == %p\n"
-                       "     dbuf->capacity  == %lu\n",
-                       dbuf->_mem, dbuf->base, dbuf->pos, dbuf->capacity);
+                       "    &dbuf->internal_buf == %p\n"
+                       "     dbuf->base         == %p\n"
+                       "     dbuf->pos          == %p\n"
+                       "     dbuf->capacity     == %lu\n",
+                       dbuf->internal_buf, dbuf->base, dbuf->pos, dbuf->capacity);
                 return 1;
         }
 
