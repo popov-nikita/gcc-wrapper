@@ -128,6 +128,67 @@ static int fini_arg_data(comm_info_t *ci,
         return 0;
 }
 
+static char *mangle_filename(const char *i_file,
+                             const char *o_file)
+{
+        char *res;
+        unsigned long reslen;
+        const char *dot, *saved;
+        int dot_found;
+
+        reslen = strlen(o_file);
+        dot = o_file + reslen;
+        dot_found = 0;
+        while (dot > o_file) {
+                dot--;
+                if (*dot == '.') {
+                        dot_found = 1;
+                        break;
+                } else if (*dot == '/') {
+                        break;
+                }
+        }
+
+        if (dot_found) {
+                reslen = (unsigned long) (dot - o_file);
+        }
+        res = xmalloc(reslen + sizeof(".pp"));
+        memcpy(res, o_file, reslen);
+        memcpy(res + reslen, ".pp", sizeof(".pp")); /*  Includes '\0' */
+        reslen += sizeof(".pp") - 1UL;
+
+        /* Find proper suffix in input file path */
+        dot = saved = i_file + strlen(i_file);
+        dot_found = 0;
+        while (dot > i_file) {
+                dot--;
+                if (*dot == '.') {
+                        dot_found = 1;
+                        break;
+                } else if (*dot == '/') {
+                        break;
+                }
+        }
+
+        if (dot_found) {
+                unsigned long sfxlen;
+
+                sfxlen = (unsigned long) (saved - dot);
+                res = xrealloc(res, reslen + sfxlen + 1UL);
+                memcpy(res + reslen,
+                       dot,
+                       sfxlen + 1UL);
+        } else {
+                /* Add fake suffix */
+                res = xrealloc(res, reslen + sizeof(".unk"));
+                memcpy(res + reslen,
+                       ".unk",
+                       sizeof(".unk"));
+        }
+
+        return res;
+}
+
 static void extend_argv(comm_info_t *ci,
                         ...)
 {
@@ -148,21 +209,66 @@ static void doit_i(const char *i_file,
                    const char *const data,
                    unsigned long size)
 {
-        print_error_msg(-1,
-                        0,
-                        "Input file: %s; Outpuf file: %s; Buf size = %lu",
-                        i_file,
-                        o_file,
-                        size);
+        char *res_name;
+        dbuf_t *dbuf;
+        int fd;
+
+        if ((dbuf = process_linemarkers(data, size)) == NULL)
+                return;
+
+        res_name = mangle_filename(i_file, o_file);
+        if ((fd = open(res_name,
+                       O_CREAT | O_WRONLY | O_EXCL,
+                       0644)) < 0) {
+                print_error_msg(-1, -1,
+                                "IGNORED: Failed to create %s",
+                                res_name);
+        } else {
+                long rv, amount;
+
+                amount = dbuf->pos - dbuf->base;
+                rv = safe_write(fd, dbuf->base, (unsigned long) amount);
+                if (rv != amount) {
+                        print_error_msg(-1, -1,
+                                        "IGNORED: Failed to write %s",
+                                        res_name);
+                        unlink(res_name);
+                }
+                close(fd);
+        }
+
+        xfree(res_name);
+        dbuf_free(dbuf);
+        xfree(dbuf);
 }
 
 static int doit(comm_info_t *ci)
 {
+        struct ext_entry {
+                char *ext;
+                unsigned long extlen;
+                char *optval;
+        };
+        static const struct ext_entry ext_mapping[] = {
+                { ".c",   sizeof(".c") - 1UL,   "cpp-output" },
+                { ".S",   sizeof(".S") - 1UL,   "assembler" },
+                { ".sx",  sizeof(".sx") - 1UL,  "assembler" },
+                { ".cc",  sizeof(".cc") - 1UL,  "c++-cpp-output" },
+                { ".cp",  sizeof(".cp") - 1UL,  "c++-cpp-output" },
+                { ".cxx", sizeof(".cxx") - 1UL, "c++-cpp-output" },
+                { ".cpp", sizeof(".cpp") - 1UL, "c++-cpp-output" },
+                { ".CPP", sizeof(".CPP") - 1UL, "c++-cpp-output" },
+                { ".c++", sizeof(".c++") - 1UL, "c++-cpp-output" },
+                { ".C",   sizeof(".C") - 1UL,   "c++-cpp-output" },
+                { NULL,   0UL,                  NULL },
+        };
+        const struct ext_entry *entry = ext_mapping;
         char *obuf = NULL;
         unsigned long osize = 0UL;
         child_ctx_t ctx_mem;
         int is_success;
         char mode_buf[3] = { '-', '\0', '\0' };
+        unsigned long pathlen;
 
         extend_argv(ci, "-E", "-o-", NULL);
         ci->argv = xrealloc(ci->argv,
@@ -193,7 +299,22 @@ static int doit(comm_info_t *ci)
                 return -1;
         }
 
+        pathlen = strlen(ci->i_file);
+        while (entry->ext != NULL) {
+                if (entry->extlen <= pathlen &&
+                    strcmp(ci->i_file + (pathlen - entry->extlen),
+                           entry->ext) == 0)
+                        break;
+                entry++;
+        }
+
         mode_buf[1] = ci->mode;
+        if (entry->ext != NULL) {
+                extend_argv(ci,
+                            "-x",
+                            entry->optval,
+                            NULL);
+        }
         extend_argv(ci,
                     "-fpreprocessed",
                     mode_buf,
