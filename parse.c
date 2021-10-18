@@ -168,258 +168,49 @@ int read_linemarker(const char *chp,
         }
 }
 
-struct line_desc {
-        char *filename;
-        unsigned long linenum;
-};
-
-static struct line_desc *push_line_desc(dbuf_t *stack,
-                                        const char *filename,
-                                        unsigned long linenum)
-{
-        struct line_desc *desc;
-
-        desc = (struct line_desc *) dbuf_alloc(stack, sizeof(*desc));
-
-        if (desc == NULL)
-                return NULL;
-
-        desc->filename = xstrdup(filename);
-        desc->linenum = linenum;
-
-        stack->pos += sizeof(*desc);
-
-        return desc;
-}
-
-static struct line_desc *pop_line_desc(dbuf_t *stack)
-{
-        struct line_desc *desc, *prev;
-
-        if (((struct line_desc *) stack->pos -
-             (struct line_desc *) stack->base) < 2L)
-                return NULL;
-
-        desc = (struct line_desc *) stack->pos - 2L;
-        prev = desc + 1L;
-
-        xfree(prev->filename); prev->filename = NULL;
-        stack->pos = (char *) prev;
-
-        return desc;
-}
-
 dbuf_t *process_linemarkers(const char *const data,
                             unsigned long size)
 {
-#define LMFL_NEW 0x1UL
-#define LMFL_RET 0x2UL
-#define LMFL_BOTH (LMFL_NEW | LMFL_RET)
-
         const char *chp = data, *const limit = data + size, *nxt;
-        dbuf_t stack_mem, *stack = &stack_mem, *dbuf;
-        struct line_desc *current;
-        linemarker_t lm_mem;
-        unsigned int skip_count = 0U;
-        /* Index of the first byte of included file
-           in @dbuf content or the first byte which follows
-           the end of included file (after we
-           resume reading the parent file). */
-        unsigned long area_start_idx = 0UL;
+        dbuf_t *buffer;
+        /* We cannot change bytes below that index in @buffer */
+        unsigned long no_change_idx = 0UL;
+        char *filename = NULL;
+        unsigned long linenum = 1UL;
 
-        /* Read initial linemarker to initialize the stack */
-        memset(&lm_mem, 0, sizeof(lm_mem));
-        if (read_linemarker(chp, limit, &lm_mem, &nxt) < 0) {
-                print_error_msg(-1, 0,
-                                "No initial linemarker");
-                return NULL;
-        }
-
-        if (nxt < limit) nxt++;
-        chp = nxt;
-
-        /* Check that initial linemarker is sane:
-           + No stack-control flags (1, 2) are present
-         */
-        if ((lm_mem.info & LMFL_BOTH) != 0UL) {
-                print_error_msg(-1, 0,
-                                "Initial linemarker is malformed:\n"
-                                "   FILENAME = %s\n"
-                                "    LINENUM = %lu\n"
-                                "       INFO = 0x%lx",
-                                lm_mem.filename,
-                                lm_mem.linenum,
-                                lm_mem.info);
-                xfree(lm_mem.filename);
-                return NULL;
-        }
-
-        dbuf_init(stack);
-        if ((current = push_line_desc(stack,
-                                      lm_mem.filename,
-                                      lm_mem.linenum)) == NULL) {
-                print_error_msg(-1, 0,
-                                "Failed to push initial linemarker:\n"
-                                "   FILENAME = %s\n"
-                                "    LINENUM = %lu\n"
-                                "       INFO = 0x%lx",
-                                lm_mem.filename,
-                                lm_mem.linenum,
-                                lm_mem.info);
-                dbuf_free(stack);
-                xfree(lm_mem.filename);
-                return NULL;
-        }
-
-        xfree(lm_mem.filename); lm_mem.filename = NULL;
-
-        dbuf = xmalloc(sizeof(*dbuf)); dbuf_init(dbuf);
+        buffer = xmalloc(sizeof(*buffer)); dbuf_init(buffer);
 
         for (; chp < limit; chp = nxt) {
+                linemarker_t lm_mem;
                 long linelen;
 
                 memset(&lm_mem, 0, sizeof(lm_mem));
-
                 if (read_linemarker(chp, limit, &lm_mem, &nxt) == 0) {
-                        if ((lm_mem.info & LMFL_BOTH) == LMFL_BOTH) {
-                                print_error_msg(-1, 0,
-                                                "Malformed linemarker:\n"
-                                                "   FILENAME = %s\n"
-                                                "    LINENUM = %lu\n"
-                                                "       INFO = 0x%lx",
-                                                lm_mem.filename,
-                                                lm_mem.linenum,
-                                                lm_mem.info);
-                                xfree(lm_mem.filename);
-                                dbuf_free(dbuf);
-                                xfree(dbuf); dbuf = NULL;
-                                goto out;
-                        } else if ((lm_mem.info & LMFL_NEW) != 0UL) {
-                                if (skip_count == UINT_MAX) {
-                                        print_error_msg(-1, 0,
-                                                        "Overflow in "
-                                                        "skip_count "
-                                                        "caused by:\n"
-                                                        "   FILENAME = %s\n"
-                                                        "    LINENUM = %lu\n"
-                                                        "       INFO = 0x%lx",
-                                                        lm_mem.filename,
-                                                        lm_mem.linenum,
-                                                        lm_mem.info);
-                                        xfree(lm_mem.filename);
-                                        dbuf_free(dbuf);
-                                        xfree(dbuf); dbuf = NULL;
-                                        goto out;
-                                } else if (skip_count > 0U) {
-                                        skip_count++;
+                        if (filename == NULL ||
+                            strcmp(filename,
+                                   lm_mem.filename) != 0) {
+                                xfree(filename);
+                                filename = lm_mem.filename;
 
-                                        goto skip_linemarker;
-                                }
+                                lm_mem.filename = NULL;
 
-                                current = push_line_desc(stack,
-                                                         lm_mem.filename,
-                                                         lm_mem.linenum);
-                                if (current == NULL) {
-                                        print_error_msg(-1, 0,
-                                                        "Failed to push "
-                                                        "linemarker:\n"
-                                                        "   FILENAME = %s\n"
-                                                        "    LINENUM = %lu\n"
-                                                        "       INFO = 0x%lx",
-                                                        lm_mem.filename,
-                                                        lm_mem.linenum,
-                                                        lm_mem.info);
-                                        xfree(lm_mem.filename);
-                                        dbuf_free(dbuf);
-                                        xfree(dbuf); dbuf = NULL;
-                                        goto out;
-                                }
+                                no_change_idx = (unsigned long) (buffer->pos -
+                                                                 buffer->base);
 
-                                area_start_idx = (unsigned long) (dbuf->pos -
-                                                                  dbuf->base);
-                        } else if ((lm_mem.info & LMFL_RET) != 0UL) {
-                                if (skip_count > 1U) {
-                                        skip_count--;
-
-                                        goto skip_linemarker;
-                                } else if (skip_count == 1U) {
-                                        print_error_msg(-1, 0,
-                                                        "Underflow in "
-                                                        "skip_count "
-                                                        "caused by:\n"
-                                                        "   FILENAME = %s\n"
-                                                        "    LINENUM = %lu\n"
-                                                        "       INFO = 0x%lx",
-                                                        lm_mem.filename,
-                                                        lm_mem.linenum,
-                                                        lm_mem.info);
-                                        xfree(lm_mem.filename);
-                                        dbuf_free(dbuf);
-                                        xfree(dbuf); dbuf = NULL;
-                                        goto out;
-                                }
-
-                                current = pop_line_desc(stack);
-                                if (current == NULL) {
-                                        print_error_msg(-1, 0,
-                                                        "Insufficient "
-                                                        "amount of pushed "
-                                                        "linemarkers. "
-                                                        "Error is caused "
-                                                        "by:\n"
-                                                        "   FILENAME = %s\n"
-                                                        "    LINENUM = %lu\n"
-                                                        "       INFO = 0x%lx",
-                                                        lm_mem.filename,
-                                                        lm_mem.linenum,
-                                                        lm_mem.info);
-                                        xfree(lm_mem.filename);
-                                        dbuf_free(dbuf);
-                                        xfree(dbuf); dbuf = NULL;
-                                        goto out;
-                                }
-
-                                if (strcmp(current->filename,
-                                           lm_mem.filename) != 0) {
-                                        print_error_msg(-1, 0,
-                                                        "Resuming "
-                                                        "linemarker has "
-                                                        "wrong filename:\n"
-                                                        "   FILENAME = %s\n"
-                                                        "    LINENUM = %lu\n"
-                                                        "       INFO = 0x%lx",
-                                                        lm_mem.filename,
-                                                        lm_mem.linenum,
-                                                        lm_mem.info);
-                                        xfree(lm_mem.filename);
-                                        dbuf_free(dbuf);
-                                        xfree(dbuf); dbuf = NULL;
-                                        goto out;
-                                }
-
-                                area_start_idx = (unsigned long) (dbuf->pos -
-                                                                  dbuf->base);
+                                goto next_line;
                         } else {
-                                if (skip_count <= 1U) {
-                                        if (strcmp(current->filename,
-                                                   lm_mem.filename) != 0)
-                                                skip_count = 1U;
-                                        else
-                                                skip_count = 0U;
-                                }
-
-                                if (skip_count > 0U)
-                                        goto skip_linemarker;
+                                xfree(lm_mem.filename);
+                                lm_mem.filename = NULL;
                         }
 
-                        if (lm_mem.linenum < current->linenum) {
+                        if (lm_mem.linenum < linenum) {
                                 unsigned long to_strip;
                                 char *p;
 
-                                to_strip = current->linenum - lm_mem.linenum;
-                                p = dbuf->pos;
+                                to_strip = linenum - lm_mem.linenum;
+                                p = buffer->pos;
 
-                                while (p > dbuf->base + area_start_idx) {
+                                while (p > buffer->base + no_change_idx) {
                                         p--;
 
                                         if (*p == '\n') {
@@ -430,76 +221,48 @@ dbuf_t *process_linemarkers(const char *const data,
                                 }
 
                                 if (to_strip > 0UL) {
-                                        /* We've encountered malicious
-                                           linemarker */
+                                        /* Because of the linemarker
+                                           we've tried to cut characters
+                                           belonging to a different file.
+                                           Prohibit that */
                                         print_error_msg(-1, 0,
-                                                        "Linemarker:\n"
+                                                        "Attempted to cut "
+                                                        "newlines beyond "
+                                                        "space of the file:\n"
                                                         "   FILENAME = %s\n"
                                                         "    LINENUM = %lu\n"
-                                                        "       INFO = 0x%lx\n"
-                                                        "instructs "
-                                                        "to cut newlines "
-                                                        "below checkpoint:\n"
-                                                        "    %lu",
-                                                        lm_mem.filename,
-                                                        lm_mem.linenum,
-                                                        lm_mem.info,
-                                                        area_start_idx);
-                                        xfree(lm_mem.filename);
-                                        dbuf_free(dbuf);
-                                        xfree(dbuf); dbuf = NULL;
+                                                        "      GUARD = %lu",
+                                                        filename,
+                                                        linenum,
+                                                        no_change_idx);
+
+                                        dbuf_free(buffer);
+                                        xfree(buffer); buffer = NULL;
                                         goto out;
                                 }
 
-                                current->linenum = lm_mem.linenum;
+                                ;
                         } else {
-                                int is_success = 1;
-
-                                for (;
-                                     current->linenum < lm_mem.linenum;
-                                     current->linenum++) {
-                                        if (dbuf_putc(dbuf, '\n') < 0) {
-                                                is_success = 0;
-                                                break;
-                                        }
-                                }
-
-                                if (!is_success) {
-                                        print_error_msg(-1, 0,
-                                                        "Failed to put "
-                                                        "newline due to "
-                                                        "the linemarker:\n"
-                                                        "   FILENAME = %s\n"
-                                                        "    LINENUM = %lu\n"
-                                                        "       INFO = 0x%lx",
-                                                        lm_mem.filename,
-                                                        lm_mem.linenum,
-                                                        lm_mem.info);
-                                        xfree(lm_mem.filename);
-                                        dbuf_free(dbuf);
-                                        xfree(dbuf); dbuf = NULL;
-                                        goto out;
-                                }
+                                /* Pretend we've put enough empty lines
+                                   to the file */
+                                ;
                         }
 
-                skip_linemarker:
+                next_line:
+                        /* We always synchronize linenum
+                           with linemarkers */
+                        linenum = lm_mem.linenum;
+
                         if (nxt < limit) nxt++;
-
-                        xfree(lm_mem.filename); lm_mem.filename = NULL;
-
-                        continue; /* for (; chp < limit; chp = nxt) */
+                        continue;
                 } else {
-                        /* read_linemarker(chp, limit, &lm_mem, &nxt) != 0 
-                           Assume normal line here */
+                        /* Assume normal line here */
                         for (nxt = chp; !is_eol(nxt, limit); nxt++) ;
                         if (nxt < limit) nxt++;
                 }
 
-                if (skip_count > 0U)
-                        continue;
-
                 if ((linelen = (long) (nxt - chp)) > (long) INT_MAX ||
-                    dbuf_printf(dbuf, "%.*s", (int) linelen, chp) < 0) {
+                    dbuf_printf(buffer, "%.*s", (int) linelen, chp) < 0) {
                         int printlen;
 
                         if (linelen < 80L)
@@ -508,29 +271,38 @@ dbuf_t *process_linemarkers(const char *const data,
                                 printlen = 80;
 
                         print_error_msg(-1, 0,
-                                        "Failed to print line\n:"
+                                        "Failed to print line:\n"
                                         "%.*s",
                                         printlen, chp);
 
-                        dbuf_free(dbuf);
-                        xfree(dbuf); dbuf = NULL;
+                        dbuf_free(buffer);
+                        xfree(buffer); buffer = NULL;
                         goto out;
                 }
 
-                current->linenum++;
+                if (linenum == ULONG_MAX) {
+                        int printlen;
+
+                        if (linelen < 80L)
+                                printlen = (int) linelen;
+                        else
+                                printlen = 80;
+
+                        print_error_msg(-1, 0,
+                                        "Linenum overflow on line:\n"
+                                        "%.*s",
+                                        printlen, chp);
+
+                        dbuf_free(buffer);
+                        xfree(buffer); buffer = NULL;
+                        goto out;
+                }
+
+                linenum++;
         }
 
 out:
-        for (current = (struct line_desc *) stack->base;
-             current < (struct line_desc *) stack->pos;
-             current++) {
-                xfree(current->filename);
-        }
+        xfree(filename); filename = NULL;
 
-        dbuf_free(stack);
-
-        return dbuf;
-#undef LMFL_BOTH
-#undef LMFL_NEW
-#undef LMFL_RET
+        return buffer;
 }
