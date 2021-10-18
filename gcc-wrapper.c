@@ -209,40 +209,45 @@ static void doit_i(const char *i_file,
                    const char *const data,
                    unsigned long size)
 {
-        char *res_name;
-        dbuf_t *dbuf;
+        dbuf_t *buffer;
+        long buffer_sz;
+        char *mangled_nm;
         int fd;
 
-        if ((dbuf = process_linemarkers(data, size)) == NULL)
+        /* Something goes wrong on processing linemarkers?
+           Skip. */
+        if ((buffer = process_linemarkers(data, size)) == NULL)
                 return;
 
-        res_name = mangle_filename(i_file, o_file);
-        if ((fd = open(res_name,
-                       O_CREAT | O_WRONLY | O_EXCL,
-                       0644)) < 0) {
-                print_error_msg(-1, -1,
-                                "IGNORED: Failed to create %s",
-                                res_name);
-        } else {
-                long rv, amount;
+        /* Nothing to write */
+        if ((buffer_sz = buffer->pos - buffer->base) <= 0L) {
+                dbuf_free(buffer); xfree(buffer);
+                return;
+        }
 
-                amount = dbuf->pos - dbuf->base;
-                rv = safe_write(fd, dbuf->base, (unsigned long) amount);
-                if (rv != amount) {
-                        print_error_msg(-1, -1,
-                                        "IGNORED: Failed to write %s",
-                                        res_name);
-                        unlink(res_name);
+        mangled_nm = mangle_filename(i_file, o_file);
+
+        if ((fd = open(mangled_nm,
+                       O_CREAT | O_WRONLY | O_EXCL,
+                       0644)) >= 0) {
+                if (safe_write(fd,
+                               buffer->base,
+                               (unsigned long) buffer_sz) != buffer_sz) {
+                        print_error_msg(-1, 0,
+                                        "GCC-WRAPPER: Failed to write %s",
+                                        mangled_nm);
+                        unlink(mangled_nm);
                 }
                 close(fd);
         }
 
-        xfree(res_name);
-        dbuf_free(dbuf);
-        xfree(dbuf);
+        xfree(mangled_nm);
+        dbuf_free(buffer); xfree(buffer);
 }
 
-static int doit(comm_info_t *ci)
+static int doit(comm_info_t *ci,
+                const char *cc,
+                const char *cpp)
 {
         struct ext_entry {
                 char *ext;
@@ -251,9 +256,12 @@ static int doit(comm_info_t *ci)
         };
         static const struct ext_entry ext_mapping[] = {
                 { ".c",   sizeof(".c") - 1UL,   "cpp-output" },
+                { ".i",   sizeof(".i") - 1UL,   "cpp-output" },
+                { ".s",   sizeof(".s") - 1UL,   "assembler" },
                 { ".S",   sizeof(".S") - 1UL,   "assembler" },
                 { ".sx",  sizeof(".sx") - 1UL,  "assembler" },
                 { ".cc",  sizeof(".cc") - 1UL,  "c++-cpp-output" },
+                { ".ii",  sizeof(".ii") - 1UL,  "c++-cpp-output" },
                 { ".cp",  sizeof(".cp") - 1UL,  "c++-cpp-output" },
                 { ".cxx", sizeof(".cxx") - 1UL, "c++-cpp-output" },
                 { ".cpp", sizeof(".cpp") - 1UL, "c++-cpp-output" },
@@ -270,7 +278,8 @@ static int doit(comm_info_t *ci)
         char mode_buf[3] = { '-', '\0', '\0' };
         unsigned long pathlen;
 
-        extend_argv(ci, "-E", "-o-", NULL);
+        ci->argv[0] = xstrdup(cpp);
+        extend_argv(ci, "-o-", NULL);
         ci->argv = xrealloc(ci->argv,
                             sizeof(char *) * (ci->argc + 1UL));
         ci->argv[ci->argc] = NULL;
@@ -283,7 +292,7 @@ static int doit(comm_info_t *ci)
 
         is_success = run_cmd(&ctx_mem) == 0 && obuf != NULL;
 
-        xfree(ci->argv[--ci->argc]);
+        xfree(ci->argv[0]); ci->argv[0] = NULL;
         xfree(ci->argv[--ci->argc]);
         ci->argv = xrealloc(ci->argv,
                             sizeof(char *) * ci->argc);
@@ -309,6 +318,7 @@ static int doit(comm_info_t *ci)
         }
 
         mode_buf[1] = ci->mode;
+        ci->argv[0] = xstrdup(cc);
         if (entry->ext != NULL) {
                 extend_argv(ci,
                             "-x",
@@ -334,6 +344,7 @@ static int doit(comm_info_t *ci)
 
         is_success = run_cmd(&ctx_mem) == 0;
 
+        xfree(ci->argv[0]); ci->argv[0] = NULL;
         ci->argv = xrealloc(ci->argv,
                             sizeof(char *) * ci->argc);
 
@@ -363,19 +374,31 @@ static int doit(comm_info_t *ci)
 
 int main(int argc, char *argv[])
 {
-        const char *cc;
-        char *located_cc;
+        const char *cc, *cpp;
+        char *located_cc, *located_cpp;
         comm_info_t ci_mem;
         int ret_code;
 
         if ((cc = getenv("REAL_CC")) == NULL)
                 cc = "gcc";
 
+        if ((cpp = getenv("REAL_CPP")) == NULL)
+                cpp = "cpp";
+
         if ((located_cc = locate_file(cc)) == NULL) {
                 print_error_msg(-1,
                                 0,
                                 "Failed to locate %s",
                                 cc);
+                return ESRCH;
+        }
+
+        if ((located_cpp = locate_file(cpp)) == NULL) {
+                print_error_msg(-1,
+                                0,
+                                "Failed to locate %s",
+                                cpp);
+                xfree(located_cc);
                 return ESRCH;
         }
 
@@ -396,20 +419,23 @@ int main(int argc, char *argv[])
 
                 ret_code = run_cmd(&ctx_mem);
 
-                xfree(ctx_mem.argv); xfree(located_cc);
+                xfree(ctx_mem.argv);
+                xfree(located_cc);
+                xfree(located_cpp);
 
                 return (ret_code == 0) ? 0 : ECHILD;
         }
 
-        ci_mem.argv[0] = xstrdup(located_cc);
-
-        ret_code = doit(&ci_mem);
+        ret_code = doit(&ci_mem,
+                        located_cc,
+                        located_cpp);
 
         while (ci_mem.argc--)
                 xfree(ci_mem.argv[ci_mem.argc]);
         xfree(ci_mem.argv);
         xfree(ci_mem.o_file);
         xfree(located_cc);
+        xfree(located_cpp);
 
         return (ret_code == 0) ? 0 : EINVAL;
 }
