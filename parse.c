@@ -210,35 +210,15 @@ dbuf_t *process_linemarkers(const char *const data,
                                 to_strip = linenum - lm_mem.linenum;
                                 p = buffer->pos;
 
-                                while (p > buffer->base + no_change_idx) {
+                                /* Do not allow rogue linemarkers
+                                   to affect lines of other files. */
+                                while (p > buffer->base + no_change_idx &&
+                                       to_strip > 0UL) {
                                         p--;
 
                                         if (*p == '\n') {
-                                                *p = ' ';
-                                                if (--to_strip == 0UL)
-                                                        break;
+                                                *p = ' '; to_strip--;
                                         }
-                                }
-
-                                if (to_strip > 0UL) {
-                                        /* Because of the linemarker
-                                           we've tried to cut characters
-                                           belonging to a different file.
-                                           Prohibit that */
-                                        print_error_msg(-1, 0,
-                                                        "Attempted to cut "
-                                                        "newlines beyond "
-                                                        "space of the file:\n"
-                                                        "   FILENAME = %s\n"
-                                                        "    LINENUM = %lu\n"
-                                                        "      GUARD = %lu",
-                                                        filename,
-                                                        linenum,
-                                                        no_change_idx);
-
-                                        dbuf_free(buffer);
-                                        xfree(buffer); buffer = NULL;
-                                        goto out;
                                 }
 
                                 ;
@@ -317,27 +297,27 @@ out:
 unsigned long trim_whitespaces(char *const data, unsigned long size)
 {
 	char *src, *dst, *saved_dst, *const limit = data + size, quote = '\0';
-	int seen_token = 0, init_ws = 1;
+	int seen_token = 0, init_whitespaces = 1;
 	enum {
-		S_WS,
+		S_WHITESPACE,
 		S_TOKEN,
 		S_IN_QUOTES,
 		S_IN_ML_COMMENT,
 		S_IN_OL_COMMENT,
-	} state = S_WS;
+	} state = S_WHITESPACE;
 
 	for (src = saved_dst = dst = data;
 	     src < limit;
 	     src++) {
 		switch (state) {
-		case S_WS:
+		case S_WHITESPACE:
 			if (is_ws(*src)) {
-				if (init_ws)
+				if (init_whitespaces)
 					*dst++ = *src;
 				continue;
 			}
 
-			init_ws = 0;
+			init_whitespaces = 0;
 
 			if (*src == '\n') {
 				if (!seen_token)
@@ -346,7 +326,7 @@ unsigned long trim_whitespaces(char *const data, unsigned long size)
 				saved_dst = dst;
 
 				seen_token = 0;
-				init_ws = 1;
+				init_whitespaces = 1;
 				continue;
 			}
 
@@ -379,7 +359,7 @@ unsigned long trim_whitespaces(char *const data, unsigned long size)
 
 		case S_TOKEN:
 			if (is_ws(*src)) {
-				state = S_WS;
+				state = S_WHITESPACE;
 				continue;
 			}
 
@@ -388,8 +368,8 @@ unsigned long trim_whitespaces(char *const data, unsigned long size)
 				saved_dst = dst;
 
 				seen_token = 0;
-				init_ws = 1;
-				state = S_WS;
+				init_whitespaces = 1;
+				state = S_WHITESPACE;
 				continue;
 			}
 
@@ -437,13 +417,13 @@ unsigned long trim_whitespaces(char *const data, unsigned long size)
 				saved_dst = dst;
 
 				seen_token = 0;
-				init_ws = 1;
+				init_whitespaces = 1;
 			} else if (*src == '*') {
 				char lookahead = (src + 1 < limit) ? *(src + 1) : '\0';
 
 				if (lookahead == '/') {
 					src++;
-					state = S_WS;
+					state = S_WHITESPACE;
 				}
 			}
 
@@ -457,8 +437,8 @@ unsigned long trim_whitespaces(char *const data, unsigned long size)
 				saved_dst = dst;
 
 				seen_token = 0;
-				init_ws = 1;
-				state = S_WS;
+				init_whitespaces = 1;
+				state = S_WHITESPACE;
 			}
 
 			continue;
