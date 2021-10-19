@@ -233,6 +233,12 @@ static void doit_i(const char *i_file,
         /* Keep buffer meta-data up-to-date */
         buffer->pos = buffer->base + buffer_sz;
 
+        /* Have we got nothing to write? */
+        if (buffer_sz <= 0L) {
+                dbuf_free(buffer); xfree(buffer);
+                return;
+        }
+
         mangled_nm = mangle_filename(i_file, o_file);
 
         if ((fd = open(mangled_nm,
