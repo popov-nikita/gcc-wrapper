@@ -133,7 +133,7 @@ int read_linemarker(const char *chp,
                     const char **nxtp);
 dbuf_t *process_linemarkers(const char *const data,
                             unsigned long size);
-unsigned long trim_whitespaces(char *const data, unsigned long size);
-unsigned long shrink_lines(char *const data, unsigned long size);
+dbuf_t *adjust_style(const char *const data,
+                     unsigned long size);
 
 #endif
