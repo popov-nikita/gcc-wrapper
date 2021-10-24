@@ -287,191 +287,372 @@ out:
         return buffer;
 }
 
-/*
-	Trims whitespaces leaving only one instance between adjacent tokens
-	(except initial whitespaces in a line).
-	Comment is considered one whitespace character.
-	Everything is done in-place.
-	Returns size of trimmed content.
- */
-unsigned long trim_whitespaces(char *const data, unsigned long size)
+struct block_desc {
+        int ch;
+        unsigned long indent;
+};
+
+static struct block_desc *push_block_desc(dbuf_t *blocks,
+                                          int ch,
+                                          unsigned long indent)
 {
-	char *src, *dst, *saved_dst, *const limit = data + size, quote = '\0';
-	int seen_token = 0, init_whitespaces = 1;
-	enum {
-		S_WHITESPACE,
-		S_TOKEN,
-		S_IN_QUOTES,
-		S_IN_ML_COMMENT,
-		S_IN_OL_COMMENT,
-	} state = S_WHITESPACE;
+        struct block_desc *desc;
 
-	for (src = saved_dst = dst = data;
-	     src < limit;
-	     src++) {
-		switch (state) {
-		case S_WHITESPACE:
-			if (is_ws(*src)) {
-				if (init_whitespaces)
-					*dst++ = *src;
-				continue;
-			}
+        desc = (struct block_desc *) dbuf_alloc(blocks, sizeof(*desc));
+        if (desc == NULL) {
+                print_error_msg(-1, 0,
+                                "Failed to push block description:\n"
+                                "    %c, %lu\n"
+                                "in function:\n"
+                                "    %s",
+                                ch, indent, __func__);
+                _exit(ENOENT);
+        }
 
-			init_whitespaces = 0;
+        memset(desc, 0, sizeof(*desc));
+        desc->ch = ch; desc->indent = indent;
 
-			if (*src == '\n') {
-				if (!seen_token)
-					dst = saved_dst;
-				*dst++ = '\n';
-				saved_dst = dst;
+        /* Overflow check is done by dbuf_alloc */
+        blocks->pos += sizeof(*desc);
 
-				seen_token = 0;
-				init_whitespaces = 1;
-				continue;
-			}
-
-			if (*src == '/') {
-				char lookahead = (src + 1 < limit) ? *(src + 1) : '\0';
-
-				if (lookahead == '*') {
-					src++;
-					state = S_IN_ML_COMMENT;
-					continue;
-				} else if (lookahead == '/') {
-					src++;
-					state = S_IN_OL_COMMENT;
-					continue;
-				}
-			}
-
-			if (seen_token)
-				*dst++ = ' ';
-
-			seen_token = 1;
-			if (*src == '"' || *src == '\'') {
-				quote = *src;
-				state = S_IN_QUOTES;
-			} else {
-				state = S_TOKEN;
-			}
-			*dst++ = *src;
-			continue;
-
-		case S_TOKEN:
-			if (is_ws(*src)) {
-				state = S_WHITESPACE;
-				continue;
-			}
-
-			if (*src == '\n') {
-				*dst++ = '\n';
-				saved_dst = dst;
-
-				seen_token = 0;
-				init_whitespaces = 1;
-				state = S_WHITESPACE;
-				continue;
-			}
-
-			if (*src == '/') {
-				char lookahead = (src + 1 < limit) ? *(src + 1) : '\0';
-
-				if (lookahead == '*') {
-					src++;
-					state = S_IN_ML_COMMENT;
-					continue;
-				} else if (lookahead == '/') {
-					src++;
-					state = S_IN_OL_COMMENT;
-					continue;
-				}
-			}
-
-			if (*src == '"' || *src == '\'') {
-				quote = *src;
-				state = S_IN_QUOTES;
-			} else {
-				;
-			}
-			*dst++ = *src;
-			continue;
-
-		case S_IN_QUOTES:
-			/* Handle escaping */
-			if (*src == '\\') {
-				if (src + 1 < limit)
-					*dst++ = *src++;
-			} else if (*src == quote) {
-				quote = '\0';
-				state = S_TOKEN;
-			}
-
-			*dst++ = *src;
-			continue;
-
-		case S_IN_ML_COMMENT:
-			if (*src == '\n') {
-				if (!seen_token)
-					dst = saved_dst;
-				*dst++ = '\n';
-				saved_dst = dst;
-
-				seen_token = 0;
-				init_whitespaces = 1;
-			} else if (*src == '*') {
-				char lookahead = (src + 1 < limit) ? *(src + 1) : '\0';
-
-				if (lookahead == '/') {
-					src++;
-					state = S_WHITESPACE;
-				}
-			}
-
-			continue;
-
-		case S_IN_OL_COMMENT:
-			if (*src == '\n') {
-				if (!seen_token)
-					dst = saved_dst;
-				*dst++ = '\n';
-				saved_dst = dst;
-
-				seen_token = 0;
-				init_whitespaces = 1;
-				state = S_WHITESPACE;
-			}
-
-			continue;
-		}
-	}
-
-	if (!seen_token)
-		dst = saved_dst;
-
-	return (unsigned long) (dst - data);
+        return desc;
 }
 
-/* Removes extra empty lines leaving only one */
-unsigned long shrink_lines(char *const data, unsigned long size)
+static struct block_desc *pop_block_desc(dbuf_t *blocks,
+                                         int ch)
 {
-	char *src, *dst, *const limit = data + size;
-	unsigned long nl_count;
+        struct block_desc *desc;
 
-	for (src = dst = data, nl_count = 0UL;
-	     src < limit;
-	     src++) {
-		if (*src == '\n') {
-			if (nl_count < 2UL) {
-				nl_count++;
-				*dst++ = *src;
-			} else {
-				; /* No copy */
-			}
-		} else {
-			nl_count = 0UL;
-			*dst++ = *src;
-		}
-	}
+        if (ch == ')')
+                ch = '(';
+        else if (ch == '}')
+                ch = '{';
+        else {
+                print_error_msg(-1, 0,
+                                "Unknown character:\n"
+                                "    %c\n"
+                                "in function:\n"
+                                "    %s",
+                                ch, __func__);
+                _exit(EINVAL);
+        }
 
-	return (unsigned long) (dst - data);
+        if (blocks->pos == blocks->base) {
+                print_error_msg(-1, 0,
+                                "No more stack entries.\n"
+                                "in function:\n"
+                                "    %s",
+                                __func__);
+                _exit(ENOENT);
+        }
+
+        desc = (struct block_desc *) blocks->pos - 1;
+
+        if (ch != desc->ch) {
+                print_error_msg(-1, 0,
+                                "Wrong block type:\n"
+                                "    expected [%c], actual [%c]\n"
+                                "in function:\n"
+                                "    %s",
+                                ch, desc->ch, __func__);
+                _exit(ESRCH);
+        }
+
+        blocks->pos = (char *) desc;
+
+        return (blocks->pos == blocks->base) ? NULL : (desc - 1);
+}
+
+static int skip_comment(const char **chpp,
+                        const char *const limit)
+{
+        const char *chp = *chpp;
+        int is_skipped = 0;
+
+        if (chp < limit && *chp++ == '/' &&
+            chp < limit && (*chp == '*' || *chp == '/')) {
+                is_skipped = 1;
+
+                if (*chp++ == '*') {
+                        int is_terminated = 0;
+
+                        /* Seek '*' '/'
+                           skipping everything until that */
+                        while (chp < limit) {
+                                if (*chp++ == '*' && chp < limit &&
+                                    *chp == '/') {
+                                        is_terminated = 1;
+                                        chp++; break;
+                                }
+                        }
+
+                        if (!is_terminated) {
+                                print_error_msg(-1, 0,
+                                                "Incomplete multiline "
+                                                "comment detected.\n"
+                                                "in function:\n"
+                                                "    %s",
+                                                __func__);
+                                _exit(EINVAL);
+                        }
+                } else {
+                        /* Eliminate the comment but keep NL
+                           character */
+                        while (!is_eol(chp, limit)) chp++;
+                }
+        }
+
+        if (is_skipped) *chpp = chp;
+
+        return is_skipped;
+}
+
+static char next_character(const char **chpp,
+                           const char *const limit)
+{
+        const char *chp = *chpp;
+        char ret;
+
+        ret = '\0';
+
+        while (skip_comment(&chp, limit) ||
+               (chp < limit && is_ws(*chp) && (chp++, 1))) ret = ' ';
+
+        /* Enumerated characters are handled specially.
+           So it is desirable to omit whitespaces
+           preceding them */
+        if (chp < limit &&
+            (ret == '\0' || (ret == ' ' && (*chp == '\n' ||
+                                            *chp == ';'  ||
+                                            *chp == '{'  ||
+                                            *chp == '}'  ||
+                                            *chp == '('  ||
+                                            *chp == ')')))) ret = *chp++;
+
+        *chpp = chp;
+        return ret;
+}
+
+dbuf_t *adjust_style(const char *const data,
+                     unsigned long size)
+{
+        const char *chp = data, *const limit = data + size;
+        dbuf_t blocks_mem, *const blocks = &blocks_mem, *buffer;
+        enum {
+                /* At the start of a new line. Substate #1.
+                   We are allowed here to add extra NL character
+                   (used perhaps for semantical grouping of statements). */
+                S_NL1,
+                /* At the start of a new line. Substate #2.
+                   Skip all whitespace characters.
+                   Add fixed amount of space characters ' '
+                   just before the initial token in the line */
+                S_NL2,
+                /* Main program text.
+                   No line data exists in the output buffer */
+                S_TEXT1,
+                /* Main program text.
+                   Some line data has been printed */
+                S_TEXT2,
+                /* This is quoted text.
+                   It should be transmitted to output buffer
+                   without any changes. */
+                S_QUOTED,
+        } state = S_NL2;
+        char ch;
+
+        unsigned long linelen;
+        struct block_desc *current;
+
+        buffer = xmalloc(sizeof(*buffer));
+        dbuf_init(blocks);
+        dbuf_init(buffer);
+
+        current = push_block_desc(blocks, '$', 0UL);
+
+        for (ch = next_character(&chp, limit); ch != '\0';) {
+                switch (state) {
+                case S_NL1:
+                        if (ch == '\n') {
+                                dbuf_putc(buffer, '\n');
+
+                                state = S_NL2;
+
+                                goto next;
+                        }
+                        /* FALLTHRU */
+                case S_NL2:
+                        if (ch == '\n' ||
+                            ch == ' ')
+                                goto next;
+
+                        for (linelen = 0UL;
+                             linelen < current->indent;
+                             linelen++) dbuf_putc(buffer, ' ');
+
+                        state = S_TEXT1;
+                        /* FALLTHRU */
+                case S_TEXT1:
+                case S_TEXT2:
+                        if (ch == '\n') {
+                                dbuf_putc(buffer, '\n');
+
+                                state = S_NL1;
+
+                                goto next;
+                        }
+
+                        if (ch == ';') {
+                                dbuf_putc(buffer, ';'); linelen++;
+                                dbuf_putc(buffer, '\n');
+
+                                if ((ch = next_character(&chp, limit)) == '\n')
+                                        ch = next_character(&chp, limit);
+
+                                state = S_NL1;
+
+                                continue;
+                        }
+
+                        if (ch == '{') {
+                                unsigned long new_indent;
+
+                                if (state == S_TEXT2) {
+                                        dbuf_putc(buffer, ' '); linelen++;
+                                }
+
+                                dbuf_putc(buffer, '{'); linelen++;
+                                dbuf_putc(buffer, '\n');
+
+                                new_indent = (current->indent & ~3UL)  + 4UL;
+                                current = push_block_desc(blocks,
+                                                          '{',
+                                                          new_indent);
+
+                                if ((ch = next_character(&chp, limit)) == '\n')
+                                        ch = next_character(&chp, limit);
+
+                                state = S_NL1;
+
+                                continue;
+                        }
+
+                        if (ch == '}') {
+                                unsigned long old_indent;
+
+                                old_indent = current->indent;
+                                current = pop_block_desc(blocks,
+                                                         '}');
+
+                                if (state == S_TEXT2) {
+                                        dbuf_putc(buffer, '\n');
+                                        for (linelen = 0UL;
+                                             linelen < current->indent;
+                                             linelen++) dbuf_putc(buffer, ' ');
+                                } else {
+                                        buffer->pos -= (old_indent -
+                                                        current->indent);
+                                }
+
+                                dbuf_putc(buffer, '}'); linelen++;
+
+                                if ((ch = next_character(&chp, limit)) == '\n') {
+                                        dbuf_putc(buffer, '\n');
+                                        ch = next_character(&chp, limit);
+
+                                        state = S_NL1;
+                                } else {
+                                        state = S_TEXT2;
+                                }
+
+                                continue;
+                        }
+
+                        if (ch == '(') {
+                                if (state == S_TEXT2) {
+                                        dbuf_putc(buffer, ' '); linelen++;
+                                }
+
+                                dbuf_putc(buffer, '('); linelen++;
+
+                                current = push_block_desc(blocks,
+                                                          '(',
+                                                          linelen);
+
+                                if ((ch = next_character(&chp, limit)) == '\n') {
+                                        dbuf_putc(buffer, '\n');
+                                        ch = next_character(&chp, limit);
+
+                                        state = S_NL1;
+                                } else {
+                                        state = S_TEXT2;
+                                }
+
+                                continue;
+                        }
+
+                        if (ch == ')') {
+                                current = pop_block_desc(blocks,
+                                                         ')');
+
+                                dbuf_putc(buffer, ')'); linelen++;
+
+                                if ((ch = next_character(&chp, limit)) == '\n') {
+                                        dbuf_putc(buffer, '\n');
+                                        ch = next_character(&chp, limit);
+
+                                        state = S_NL1;
+                                } else {
+                                        state = S_TEXT2;
+                                }
+
+                                continue;
+                        }
+
+                        if (ch == '"' || ch == '\'') {
+                                dbuf_putc(buffer, ch); linelen++;
+
+                                state = S_QUOTED;
+
+                                continue;
+                        }
+
+                        dbuf_putc(buffer, ch); linelen++;
+
+                        state = S_TEXT2;
+
+                        goto next;
+
+                case S_QUOTED:
+                        while (chp < limit && *chp != ch) {
+                                dbuf_putc(buffer, *chp); linelen++;
+
+                                if (*chp++ == '\\' && chp < limit) {
+                                        dbuf_putc(buffer, *chp++); linelen++;
+                                }
+                        }
+
+                        if (chp >= limit) {
+                                print_error_msg(-1, 0,
+                                                "Incomplete quoted "
+                                                "text detected.\n"
+                                                "in function:\n"
+                                                "    %s",
+                                                __func__);
+                                _exit(EINVAL);
+                        }
+
+                        dbuf_putc(buffer, *chp++); linelen++;
+
+                        state = S_TEXT2;
+
+                        goto next;
+                }
+        next:
+                ch = next_character(&chp, limit);
+        }
+
+        dbuf_free(blocks);
+
+        return buffer;
 }

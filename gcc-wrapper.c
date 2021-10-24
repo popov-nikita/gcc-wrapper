@@ -209,7 +209,7 @@ static void doit_i(const char *i_file,
                    const char *const data,
                    unsigned long size)
 {
-        dbuf_t *buffer;
+        dbuf_t *buffer, *tmp;
         long buffer_sz;
         char *mangled_nm;
         int fd;
@@ -226,15 +226,13 @@ static void doit_i(const char *i_file,
         }
 
         /* Make our file somewhat pretty */
-        buffer_sz = (long) trim_whitespaces(buffer->base,
-                                            (unsigned long) buffer_sz);
-        buffer_sz = (long) shrink_lines(buffer->base,
-                                        (unsigned long) buffer_sz);
-        /* Keep buffer meta-data up-to-date */
-        buffer->pos = buffer->base + buffer_sz;
+        tmp = adjust_style(buffer->base, (unsigned long) buffer_sz);
+
+        dbuf_free(buffer); xfree(buffer);
+        buffer = tmp; tmp = NULL;
 
         /* Have we got nothing to write? */
-        if (buffer_sz <= 0L) {
+        if ((buffer_sz = buffer->pos - buffer->base) <= 0L) {
                 dbuf_free(buffer); xfree(buffer);
                 return;
         }
