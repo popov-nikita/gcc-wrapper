@@ -303,7 +303,7 @@ static struct block_desc *push_block_desc(dbuf_t *blocks,
                 print_error_msg(-1, 0,
                                 "Failed to push block description:\n"
                                 "    %c, %lu\n"
-                                "in function:\n"
+                                "In function:\n"
                                 "    %s",
                                 ch, indent, __func__);
                 _exit(ENOENT);
@@ -331,7 +331,7 @@ static struct block_desc *pop_block_desc(dbuf_t *blocks,
                 print_error_msg(-1, 0,
                                 "Unknown character:\n"
                                 "    %c\n"
-                                "in function:\n"
+                                "In function:\n"
                                 "    %s",
                                 ch, __func__);
                 _exit(EINVAL);
@@ -340,7 +340,7 @@ static struct block_desc *pop_block_desc(dbuf_t *blocks,
         if (blocks->pos == blocks->base) {
                 print_error_msg(-1, 0,
                                 "No more stack entries.\n"
-                                "in function:\n"
+                                "In function:\n"
                                 "    %s",
                                 __func__);
                 _exit(ENOENT);
@@ -352,7 +352,7 @@ static struct block_desc *pop_block_desc(dbuf_t *blocks,
                 print_error_msg(-1, 0,
                                 "Wrong block type:\n"
                                 "    expected [%c], actual [%c]\n"
-                                "in function:\n"
+                                "In function:\n"
                                 "    %s",
                                 ch, desc->ch, __func__);
                 _exit(ESRCH);
@@ -363,10 +363,10 @@ static struct block_desc *pop_block_desc(dbuf_t *blocks,
         return (blocks->pos == blocks->base) ? NULL : (desc - 1);
 }
 
-static int skip_comment(const char **chpp,
-                        const char *const limit)
+static int skip_comment(char **chpp,
+                        char *const limit)
 {
-        const char *chp = *chpp;
+        char *chp = *chpp;
         int is_skipped = 0;
 
         if (chp < limit && *chp++ == '/' &&
@@ -390,7 +390,7 @@ static int skip_comment(const char **chpp,
                                 print_error_msg(-1, 0,
                                                 "Incomplete multiline "
                                                 "comment detected.\n"
-                                                "in function:\n"
+                                                "In function:\n"
                                                 "    %s",
                                                 __func__);
                                 _exit(EINVAL);
@@ -407,11 +407,10 @@ static int skip_comment(const char **chpp,
         return is_skipped;
 }
 
-static char next_character(const char **chpp,
-                           const char *const limit)
+static char get_character(char **chpp,
+                          char *const limit)
 {
-        const char *chp = *chpp;
-        char ret;
+        char *chp = *chpp, ret;
 
         ret = '\0';
 
@@ -433,10 +432,29 @@ static char next_character(const char **chpp,
         return ret;
 }
 
-dbuf_t *adjust_style(const char *const data,
+static void unget_character(char **chpp,
+                            char ch,
+                            char *const limit)
+{
+        char *chp = *chpp;
+
+        if (chp > limit) {
+                *--chp = ch;
+                *chpp = chp;
+        } else {
+                print_error_msg(-1, 0,
+                                "No head space for character.\n"
+                                "In function:\n"
+                                "    %s",
+                                __func__);
+                _exit(ENOMEM);
+        }
+}
+
+dbuf_t *adjust_style(char *const data,
                      unsigned long size)
 {
-        const char *chp = data, *const limit = data + size;
+        char *chp = data, *const limit = data + size, ch;
         dbuf_t blocks_mem, *const blocks = &blocks_mem, *buffer;
         enum {
                 /* At the start of a new line. Substate #1.
@@ -459,9 +477,8 @@ dbuf_t *adjust_style(const char *const data,
                    without any changes. */
                 S_QUOTED,
         } state = S_NL2;
-        char ch;
 
-        unsigned long linelen;
+        unsigned long linelen, blk_indent = 0UL;
         struct block_desc *current;
 
         buffer = xmalloc(sizeof(*buffer));
@@ -470,7 +487,7 @@ dbuf_t *adjust_style(const char *const data,
 
         current = push_block_desc(blocks, '$', 0UL);
 
-        for (ch = next_character(&chp, limit); ch != '\0';) {
+        for (ch = get_character(&chp, limit); ch != '\0';) {
                 switch (state) {
                 case S_NL1:
                         if (ch == '\n') {
@@ -495,9 +512,7 @@ dbuf_t *adjust_style(const char *const data,
                 case S_TEXT1:
                 case S_TEXT2:
                         if (ch == '\n') {
-                                dbuf_putc(buffer, '\n');
-
-                                state = S_NL1;
+                                unget_character(&chp, ' ', data);
 
                                 goto next;
                         }
@@ -506,8 +521,8 @@ dbuf_t *adjust_style(const char *const data,
                                 dbuf_putc(buffer, ';'); linelen++;
                                 dbuf_putc(buffer, '\n');
 
-                                if ((ch = next_character(&chp, limit)) == '\n')
-                                        ch = next_character(&chp, limit);
+                                if ((ch = get_character(&chp, limit)) == '\n')
+                                        ch = get_character(&chp, limit);
 
                                 state = S_NL1;
 
@@ -515,8 +530,6 @@ dbuf_t *adjust_style(const char *const data,
                         }
 
                         if (ch == '{') {
-                                unsigned long new_indent;
-
                                 if (state == S_TEXT2) {
                                         dbuf_putc(buffer, ' '); linelen++;
                                 }
@@ -524,13 +537,14 @@ dbuf_t *adjust_style(const char *const data,
                                 dbuf_putc(buffer, '{'); linelen++;
                                 dbuf_putc(buffer, '\n');
 
-                                new_indent = (current->indent & ~3UL)  + 4UL;
+                                blk_indent += 4UL;
+
                                 current = push_block_desc(blocks,
                                                           '{',
-                                                          new_indent);
+                                                          blk_indent);
 
-                                if ((ch = next_character(&chp, limit)) == '\n')
-                                        ch = next_character(&chp, limit);
+                                if ((ch = get_character(&chp, limit)) == '\n')
+                                        ch = get_character(&chp, limit);
 
                                 state = S_NL1;
 
@@ -538,9 +552,6 @@ dbuf_t *adjust_style(const char *const data,
                         }
 
                         if (ch == '}') {
-                                unsigned long old_indent;
-
-                                old_indent = current->indent;
                                 current = pop_block_desc(blocks,
                                                          '}');
 
@@ -550,15 +561,31 @@ dbuf_t *adjust_style(const char *const data,
                                              linelen < current->indent;
                                              linelen++) dbuf_putc(buffer, ' ');
                                 } else {
-                                        buffer->pos -= (old_indent -
-                                                        current->indent);
+                                        assert(linelen == blk_indent);
+
+                                        if (current->indent > linelen) {
+                                                for (;
+                                                     linelen < current->indent;
+                                                     linelen++) {
+                                                        dbuf_putc(buffer, ' ');
+                                                }
+                                        } else {
+                                                unsigned long delta;
+
+                                                delta = (linelen -
+                                                         current->indent);
+                                                linelen -= delta;
+                                                buffer->pos -= delta;
+                                        }
                                 }
+
+                                blk_indent -= 4UL;
 
                                 dbuf_putc(buffer, '}'); linelen++;
 
-                                if ((ch = next_character(&chp, limit)) == '\n') {
+                                if ((ch = get_character(&chp, limit)) == '\n') {
                                         dbuf_putc(buffer, '\n');
-                                        ch = next_character(&chp, limit);
+                                        ch = get_character(&chp, limit);
 
                                         state = S_NL1;
                                 } else {
@@ -579,9 +606,9 @@ dbuf_t *adjust_style(const char *const data,
                                                           '(',
                                                           linelen);
 
-                                if ((ch = next_character(&chp, limit)) == '\n') {
+                                if ((ch = get_character(&chp, limit)) == '\n') {
                                         dbuf_putc(buffer, '\n');
-                                        ch = next_character(&chp, limit);
+                                        ch = get_character(&chp, limit);
 
                                         state = S_NL1;
                                 } else {
@@ -597,14 +624,12 @@ dbuf_t *adjust_style(const char *const data,
 
                                 dbuf_putc(buffer, ')'); linelen++;
 
-                                if ((ch = next_character(&chp, limit)) == '\n') {
-                                        dbuf_putc(buffer, '\n');
-                                        ch = next_character(&chp, limit);
-
-                                        state = S_NL1;
-                                } else {
-                                        state = S_TEXT2;
+                                if ((ch = get_character(&chp, limit)) == '\n') {
+                                        unget_character(&chp, ' ', data);
+                                        ch = get_character(&chp, limit);
                                 }
+
+                                state = S_TEXT2;
 
                                 continue;
                         }
@@ -636,7 +661,7 @@ dbuf_t *adjust_style(const char *const data,
                                 print_error_msg(-1, 0,
                                                 "Incomplete quoted "
                                                 "text detected.\n"
-                                                "in function:\n"
+                                                "In function:\n"
                                                 "    %s",
                                                 __func__);
                                 _exit(EINVAL);
@@ -649,7 +674,7 @@ dbuf_t *adjust_style(const char *const data,
                         goto next;
                 }
         next:
-                ch = next_character(&chp, limit);
+                ch = get_character(&chp, limit);
         }
 
         dbuf_free(blocks);

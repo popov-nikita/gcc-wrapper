@@ -37,6 +37,7 @@
 	EDOM		33
 	ERANGE		34
  */
+#include <assert.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -133,7 +134,10 @@ int read_linemarker(const char *chp,
                     const char **nxtp);
 dbuf_t *process_linemarkers(const char *const data,
                             unsigned long size);
-dbuf_t *adjust_style(const char *const data,
+/* adjust_style may alter @data!
+   Generally, after usage, 
+   input buffer should be freed */
+dbuf_t *adjust_style(char *const data,
                      unsigned long size);
 
 #endif
