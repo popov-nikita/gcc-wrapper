@@ -3,7 +3,7 @@ TESTS := test-linemarkers \
          test-run-cmd
 
 CC := gcc
-CFLAGS := -O2 -Wall -Wextra -fsanitize=undefined
+CFLAGS := -O2 -Wall -Wextra
 RM := rm
 
 SOURCES := $(patsubst %,%.c,$(TESTS))
