@@ -6,7 +6,7 @@ HEADERS := common.h
 PROGRAM := gcc-wrapper
 
 CC := gcc
-CFLAGS := -O0 -Wall -Wextra -g -fsanitize=undefined
+CFLAGS := -O2 -Wall -Wextra
 RM := rm
 
 .PHONY: all clean test
