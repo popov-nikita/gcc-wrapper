@@ -204,12 +204,20 @@ static void extend_argv(comm_info_t *ci,
         va_end(ap);
 }
 
+enum source_type {
+        SRC_T_UNK,
+        SRC_T_C,
+        SRC_T_ASM,
+        SRC_T_CPLUS,
+};
+
 static void doit_i(const char *i_file,
                    const char *o_file,
+                   enum source_type type,
                    const char *const data,
                    unsigned long size)
 {
-        dbuf_t *buffer, *tmp;
+        dbuf_t *buffer;
         long buffer_sz;
         char *mangled_nm;
         int fd;
@@ -225,16 +233,20 @@ static void doit_i(const char *i_file,
                 return;
         }
 
-        /* Make our file somewhat pretty */
-        tmp = adjust_style(buffer->base, (unsigned long) buffer_sz);
+        /* C files need some style adjustments... */
+        if (type == SRC_T_C) {
+                dbuf_t *tmp;
 
-        dbuf_free(buffer); xfree(buffer);
-        buffer = tmp; tmp = NULL;
-
-        /* Have we got nothing to write? */
-        if ((buffer_sz = buffer->pos - buffer->base) <= 0L) {
+                tmp = adjust_style(buffer->base,
+                                   (unsigned long) buffer_sz);
                 dbuf_free(buffer); xfree(buffer);
-                return;
+                buffer = tmp; tmp = NULL;
+
+                /* Have we got nothing to write? */
+                if ((buffer_sz = buffer->pos - buffer->base) <= 0L) {
+                        dbuf_free(buffer); xfree(buffer);
+                        return;
+                }
         }
 
         mangled_nm = mangle_filename(i_file, o_file);
@@ -265,22 +277,23 @@ static int doit(comm_info_t *ci,
                 char *ext;
                 unsigned long extlen;
                 char *optval;
+                enum source_type type;
         };
         static const struct ext_entry ext_mapping[] = {
-                { ".c",   sizeof(".c") - 1UL,   "cpp-output" },
-                { ".i",   sizeof(".i") - 1UL,   "cpp-output" },
-                { ".s",   sizeof(".s") - 1UL,   "assembler" },
-                { ".S",   sizeof(".S") - 1UL,   "assembler" },
-                { ".sx",  sizeof(".sx") - 1UL,  "assembler" },
-                { ".cc",  sizeof(".cc") - 1UL,  "c++-cpp-output" },
-                { ".ii",  sizeof(".ii") - 1UL,  "c++-cpp-output" },
-                { ".cp",  sizeof(".cp") - 1UL,  "c++-cpp-output" },
-                { ".cxx", sizeof(".cxx") - 1UL, "c++-cpp-output" },
-                { ".cpp", sizeof(".cpp") - 1UL, "c++-cpp-output" },
-                { ".CPP", sizeof(".CPP") - 1UL, "c++-cpp-output" },
-                { ".c++", sizeof(".c++") - 1UL, "c++-cpp-output" },
-                { ".C",   sizeof(".C") - 1UL,   "c++-cpp-output" },
-                { NULL,   0UL,                  NULL },
+                { ".c",   sizeof(".c") - 1UL,   "cpp-output",     SRC_T_C },
+                { ".i",   sizeof(".i") - 1UL,   "cpp-output",     SRC_T_C },
+                { ".s",   sizeof(".s") - 1UL,   "assembler",      SRC_T_ASM },
+                { ".S",   sizeof(".S") - 1UL,   "assembler",      SRC_T_ASM },
+                { ".sx",  sizeof(".sx") - 1UL,  "assembler",      SRC_T_ASM },
+                { ".cc",  sizeof(".cc") - 1UL,  "c++-cpp-output", SRC_T_CPLUS },
+                { ".ii",  sizeof(".ii") - 1UL,  "c++-cpp-output", SRC_T_CPLUS },
+                { ".cp",  sizeof(".cp") - 1UL,  "c++-cpp-output", SRC_T_CPLUS },
+                { ".cxx", sizeof(".cxx") - 1UL, "c++-cpp-output", SRC_T_CPLUS },
+                { ".cpp", sizeof(".cpp") - 1UL, "c++-cpp-output", SRC_T_CPLUS },
+                { ".CPP", sizeof(".CPP") - 1UL, "c++-cpp-output", SRC_T_CPLUS },
+                { ".c++", sizeof(".c++") - 1UL, "c++-cpp-output", SRC_T_CPLUS },
+                { ".C",   sizeof(".C") - 1UL,   "c++-cpp-output", SRC_T_CPLUS },
+                { NULL,   0UL,                  NULL,             SRC_T_UNK },
         };
         const struct ext_entry *entry = ext_mapping;
         char *obuf = NULL;
@@ -373,6 +386,7 @@ static int doit(comm_info_t *ci,
                     S_ISREG(ost_mem.st_mode)) {
                         doit_i(ci->i_file,
                                ci->o_file,
+                               entry->type,
                                obuf,
                                osize);
                 }
