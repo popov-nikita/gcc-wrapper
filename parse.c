@@ -478,7 +478,7 @@ dbuf_t *adjust_style(char *const data,
                 S_QUOTED,
         } state = S_NL2;
 
-        unsigned long linelen, blk_indent = 0UL;
+        unsigned long linelen = 0UL, blk_indent = 0UL;
         struct block_desc *current;
 
         buffer = xmalloc(sizeof(*buffer));
